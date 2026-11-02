@@ -1,0 +1,12 @@
+* text=auto eol=crlf
+
+# Linux 运行时直接消费的文件必须保持 LF：
+# bash 遇到 CRLF 会报 $'\r': command not found，systemd 与 Dockerfile 的续行也会被 \r 破坏。
+*.sh                      text eol=lf
+deploy/linux/*            text eol=lf
+deploy/docker/Dockerfile  text eol=lf
+
+*.zip binary
+*.png binary
+*.jpg binary
+*.ico binary

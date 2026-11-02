@@ -1,0 +1,13 @@
+.tools/
+.vault/
+.test-runtime/
+dist/
+coverage.out
+*.test
+__pycache__/
+*.pyc
+.workbuddy/
+/vault
+/vault.exe
+/vault-agent
+/vault-agent.exe

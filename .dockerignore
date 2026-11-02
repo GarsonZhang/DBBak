@@ -1,0 +1,9 @@
+.git
+.gitignore
+.tools
+.test-runtime
+.vault
+.workbuddy
+dist
+coverage.out
+*.test

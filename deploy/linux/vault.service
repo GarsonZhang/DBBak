@@ -1,0 +1,46 @@
+[Unit]
+Description=Vault single-instance database backup controller
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vault
+Group=vault
+EnvironmentFile=/etc/vault/vault.env
+WorkingDirectory=/var/lib/vault
+ExecStart=/usr/local/bin/vault serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+KillSignal=SIGTERM
+UMask=0077
+StateDirectory=vault
+StateDirectoryMode=0700
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ReadWritePaths=/var/lib/vault
+CapabilityBoundingSet=
+AmbientCapabilities=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

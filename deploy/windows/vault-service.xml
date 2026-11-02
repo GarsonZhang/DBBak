@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- WinSW v2.12.0；凭据不写入此文件。安装脚本默认配置 NT SERVICE\Vault 虚拟账号。 -->
+<service>
+  <id>Vault</id>
+  <name>Vault</name>
+  <description>Vault 单实例数据库备份控制服务</description>
+  <executable>C:\Program Files\Vault\vault.exe</executable>
+  <arguments>serve</arguments>
+  <workingdirectory>C:\ProgramData\Vault</workingdirectory>
+  <env name="VAULT_ADDR" value="127.0.0.1:8080"/>
+  <env name="VAULT_DATA_DIR" value="C:\ProgramData\Vault"/>
+  <env name="VAULT_DATABASE" value="C:\ProgramData\Vault\data\vault.db"/>
+  <env name="VAULT_BACKUP_ROOT" value="C:\ProgramData\Vault\backups"/>
+  <env name="VAULT_MASTER_KEY_FILE" value="C:\ProgramData\Vault\key\master.key"/>
+  <env name="VAULT_SESSION_TTL" value="12h"/>
+  <env name="VAULT_SCHEDULER_INTERVAL" value="2s"/>
+  <env name="VAULT_BACKUP_TIMEOUT" value="30m"/>
+  <logpath>C:\ProgramData\Vault\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec"/>
+  <resetfailure>1 hour</resetfailure>
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+</service>

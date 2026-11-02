@@ -1,0 +1,24 @@
+services:
+  mysql:
+    image: mysql:8.4.13
+    restart: unless-stopped
+    command: ["mysqld", "--skip-log-bin", "--bind-address=0.0.0.0"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${VAULT_TEST_ROOT_PASSWORD:?请设置隔离测试 root 密码}
+      MYSQL_DATABASE: vault_source
+      MYSQL_USER: vault_test
+      MYSQL_PASSWORD: ${VAULT_TEST_MYSQL_PASSWORD:?请设置隔离测试账号密码}
+    ports:
+      - "127.0.0.1:33306:3306"
+    volumes:
+      - vault-phase1-mysql-data:/var/lib/mysql
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$${MYSQL_ROOT_PASSWORD} mysqladmin ping -h 127.0.0.1 -uroot --silent"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+volumes:
+  vault-phase1-mysql-data:

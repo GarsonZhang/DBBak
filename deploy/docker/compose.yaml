@@ -1,0 +1,52 @@
+# 正式单机示例。构建产物不等于运行验收：必须在目标 Linux 主机实际启动，
+# 验证 readiness、重启持久化、备份/恢复和所需数据库客户端后才能验收。
+name: vault-production
+
+services:
+  vault:
+    image: vault:0.2.0-phase2
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+    environment:
+      VAULT_ADDR: 0.0.0.0:8080
+      VAULT_DATA_DIR: /var/lib/vault
+      VAULT_DATABASE: /var/lib/vault/vault.db
+      VAULT_BACKUP_ROOT: /backups
+      VAULT_MASTER_KEY_FILE: /etc/vault-key/master.key
+      VAULT_SESSION_TTL: 12h
+      VAULT_SCHEDULER_INTERVAL: 2s
+      VAULT_BACKUP_TIMEOUT: 30m
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # SQLite 与 -wal/-shm 必须位于同一数据卷；主密钥使用独立卷并单独异地备份。
+      - vault-data:/var/lib/vault
+      - vault-backups:/backups
+      - vault-master-key:/etc/vault-key
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--show-error", "http://127.0.0.1:8080/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 256
+    stop_grace_period: 30s
+
+volumes:
+  vault-data:
+    name: vault-production-data
+  vault-backups:
+    name: vault-production-backups
+  vault-master-key:
+    name: vault-production-master-key

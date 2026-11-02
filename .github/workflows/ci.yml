@@ -1,0 +1,59 @@
+# 最小 CI：行尾检查、静态检查、测试与双平台构建。
+# Go 版本与 Vault_文档/Vault_兼容性矩阵.md 记录的基线保持一致。
+# 真实的数据库备份与恢复验收不在此运行，需要隔离数据库，见 scripts/。
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查行尾规范
+        run: |
+          if git ls-files --eol | grep -Eq 'w/mixed'; then
+            echo "存在混合行尾文件，按 .gitattributes 应为 CRLF："
+            git ls-files --eol | grep -E 'w/mixed'
+            exit 1
+          fi
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: go.sum
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 单元与集成测试
+        run: go test ./...
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: go.sum
+
+      # 交叉构建只证明可编译，不构成目标平台运行验收。
+      - name: 构建 ${{ matrix.goos }}/amd64
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: amd64
+        run: go build -trimpath -buildvcs=false -o dist/vault-${{ matrix.goos }}-amd64 ./cmd/vault
