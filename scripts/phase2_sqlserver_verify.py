@@ -52,7 +52,8 @@ def settings() -> tuple[Path, Path, Path, Path]:
 
 def sqlcmd(work: Path, sql: str, database: str = "master", capture: bool = False) -> str:
     script = work / ("statement-" + str(time.time_ns()) + ".sql")
-    script.write_text(sql, encoding="utf-8")
+    # SET NOCOUNT ON 抑制“(N rows affected)”，否则会被当成 FILELISTONLY 的数据行。
+    script.write_text("SET NOCOUNT ON;\n" + sql, encoding="utf-8")
     args = [SQLCMD, "-S", SERVER, "-d", database, "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-f", "65001", "-i", str(script)]
     env = os.environ.copy()
     if USER:
@@ -73,7 +74,10 @@ def sqlcmd(work: Path, sql: str, database: str = "master", capture: bool = False
 
 
 def rows(output: str) -> list[list[str]]:
-    return [[column.strip() for column in line.split("|")] for line in output.splitlines() if line.strip()]
+    # 仍保留过滤，兼容未走 SET NOCOUNT ON 的历史输出。
+    noise = re.compile(r"^\(\d+ rows? affected\)$")
+    lines = [line for line in output.splitlines() if line.strip() and not noise.match(line.strip())]
+    return [[column.strip() for column in line.split("|")] for line in lines]
 
 
 def main() -> None:

@@ -81,7 +81,10 @@ func (c MySQLClient) Dump(ctx context.Context, source metadata.Source, password,
 func (c MySQLClient) Engine() string { return "mysql" }
 
 // Execute 在隔离工作目录生成单库 SQL 文件。
-func (c MySQLClient) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string) (ExecuteResult, error) {
+func (c MySQLClient) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string, spec BackupSpec) (ExecuteResult, error) {
+	if spec.Type != "" && spec.Type != "full" {
+		return ExecuteResult{}, &ToolError{Code: "BACKUP_TYPE_UNSUPPORTED", Message: "MySQL 适配器当前只实现逻辑全量，差异与日志未实现"}
+	}
 	produced := filepath.Join(workPath, "dump.sql")
 	if err := c.Dump(ctx, source, password, produced); err != nil {
 		return ExecuteResult{}, err

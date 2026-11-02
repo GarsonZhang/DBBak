@@ -49,6 +49,8 @@ $env:VAULT_DATA_DIR = $DataDir
 $env:VAULT_BACKUP_ROOT = $BackupRoot
 $env:VAULT_ADDR = "127.0.0.1:$Port"
 $env:VAULT_SCHEDULER_INTERVAL = '2s'
+# SQL Server 已于 2026-11-02 完成真实备份与异名恢复验收，开发环境显式开启任务创建。
+$env:VAULT_SQLSERVER_ENABLED = '1'
 
 # 客户端路径指向便携安装；文件缺失时连接测试会返回 TOOL_MISSING，不会伪造成功。
 $env:VAULT_MYSQL = Join-Path $Root '.tools\mysql-8.4.13-winx64\bin\mysql.exe'

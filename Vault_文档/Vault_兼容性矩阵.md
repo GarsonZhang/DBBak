@@ -43,7 +43,7 @@ MySQL 8.4 属于 LTS 系列。mysqldump 是逻辑备份工具，不是物理差�
 | 引擎与路线 | 全量 | 差异/增量 | 日志 | 恢复验证 |
 | --- | --- | --- | --- | --- |
 | MySQL 8.4.13 + mysqldump 8.4.13 | 已实现并在上述 Windows 隔离组合验证 | 产品内未实现，不用重复全量冒充 | binlog 全量坐标 + 时间点重放脚本已验证；产品调度未接入 | 独立 vault_restore 已验证 |
-| SQL Server 原生 | 适配器代码已实现，unverified | 未实现 | 未实现 | 未运行 |
+| SQL Server 2025（17.0.1000.7）+ sqlcmd（Windows，SQL 登录，FULL 恢复模式） | 已验证：BACKUP DATABASE WITH CHECKSUM | 已验证：WITH DIFFERENTIAL，挂到全量链 | 已验证：BACKUP LOG，`.trn` 挂链 | 全量+差异+日志链式恢复已验证（NORECOVERY 链，无 REPLACE；日志后数据未回放） |
 | PostgreSQL 18.6 + pg_basebackup 18.6（Windows） | 已实现并在上述隔离组合验证 | 未实现 | WAL 归档+目标 LSN 脚本已验证；产品调度未接入 | 独立集群已验证 |
 | PostgreSQL pgBackRest | 未实现 | 未实现 | 未实现 | 未运行 |
 | PostgreSQL pg_dump | 未实现 | 未实现 | 未实现 | 未运行 |

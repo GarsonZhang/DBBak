@@ -29,7 +29,7 @@ Pop-Location
 - 保留策略、服务端清理预览与明确确认后的清理。
 - hash 深链和浏览器前进/后退导航。
 
-SQL Server、差异/增量、事务日志/binlog/WAL、远程 Agent、NAS/S3、自动清理和正式三平台发行包均为未实现能力。PostgreSQL 当前只实现 Windows 原生 pg_basebackup 全量，pgBackRest 和 WAL 时间点恢复未实现。
+SQL Server 适配器与界面入口已实现（原生 BACKUP DATABASE 全量），已完成真实备份与异名恢复验收；任务创建需服务端开启 `VAULT_SQLSERVER_ENABLED`。差异/增量、事务日志/binlog/WAL、远程 Agent 控制端、NAS/S3 和正式三平台发行包仍未实现。PostgreSQL 当前只实现 Windows 原生 pg_basebackup 全量，pgBackRest 和 WAL 时间点恢复未实现。
 
 ## 文件
 

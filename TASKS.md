@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-阶段一 MySQL 全量和阶段二 PostgreSQL 全量已真实验收。SQL Server 适配器与验证脚本已实现但未运行真实恢复。MySQL binlog、PostgreSQL WAL 时间点恢复脚本已真实验证，但尚未接入产品调度。远程 Agent 协议、自动清理和发行脚本有实现或测试，仍有控制端、S3、服务运行和 Docker 验收缺口。
+阶段一 MySQL 全量、阶段二 PostgreSQL 全量与 SQL Server 原生全量均已真实验收（SQL Server 于 2026-11-02 完成异名恢复）。MySQL binlog、PostgreSQL WAL 时间点恢复脚本已真实验证，但尚未接入产品调度。远程 Agent 协议、自动清理和发行脚本有实现或测试，仍有控制端、S3、服务运行和 Docker 验收缺口。
 
 ## 技术基线
 
@@ -55,9 +55,8 @@
 
 ## 未完成或未运行
 
-- SQL Server 真实全量、异名恢复和 LSN 元数据验收；适配器保持 unverified，任务被禁止。
+- SQL Server 恢复链的产品化缺口：无按时间点选择的恢复 UI，链成员不参与自动清理。
 - MySQL binlog/PostgreSQL WAL 产品化调度、归档进程管理、恢复链 UI 和一键 PITR。
-- SQL Server 差异和事务日志。
 - Agent 控制端 `/agent/v1` 接口、Runner 执行集成、真实证书链和真实网络。
 - S3 对象存储；NAS 仍依赖本地/挂载路径。
 - 日志链感知自动清理。
@@ -66,7 +65,7 @@
 
 ## 下一步
 
-1. 在明确授权的隔离 SQL Server 环境运行现有验证脚本，留证后开放能力。
+1. 为 SQL Server 恢复链补产品化能力：按时间点选择恢复目标、链清单导出、链感知清理。
 2. 将两套已通过 PITR 脚本的产品化接口、归档状态和恢复链模型接入 Vault。
 3. 完成 Agent 控制端及 Runner 集成，再接入 S3 和日志链清理。
 4. 在目标平台执行服务安装、升级、重启、持久化、恢复和卸载验收。

@@ -46,6 +46,29 @@ func (s *Store) DeleteArtifactRecord(ctx context.Context, id string) error {
 }
 
 // ListArtifacts 查询文件记录；jobID 为空时返回全部。
+// LatestVerifiedArtifacts 返回指定数据源与仓库下最近的已校验对象，用于确定差异与日志的基线。
+func (s *Store) LatestVerifiedArtifacts(ctx context.Context, sourceID, targetID string, limit int) ([]Artifact, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, artifactSelect+
+		` WHERE a.source_id=? AND a.target_id=? AND a.state='verified' ORDER BY a.created_at DESC LIMIT ?`,
+		sourceID, targetID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Artifact, 0, limit)
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, artifact)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) ListArtifacts(ctx context.Context, jobID string) ([]Artifact, error) {
 	query := artifactSelect
 	args := []any{}

@@ -10,15 +10,15 @@ import (
 
 // CreateJob 持久化调度与保留策略。
 func (s *Store) CreateJob(ctx context.Context, job Job) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(id,name,source_id,target_id,timezone,schedule_type,time_of_day,weekday,interval_minutes,enabled,retention_days,min_full,auto_cleanup,next_run_at,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		job.ID, job.Name, job.SourceID, job.TargetID, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), job.Revision, formatTime(job.CreatedAt), formatTime(job.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(id,name,source_id,target_id,timezone,schedule_type,time_of_day,weekday,interval_minutes,enabled,backup_type,retention_days,min_full,auto_cleanup,next_run_at,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.Name, job.SourceID, job.TargetID, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), job.Revision, formatTime(job.CreatedAt), formatTime(job.UpdatedAt))
 	return err
 }
 
 // UpdateJob 使用 revision 防止覆盖并发修改。
 func (s *Store) UpdateJob(ctx context.Context, job Job) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET name=?,source_id=?,target_id=?,timezone=?,schedule_type=?,time_of_day=?,weekday=?,interval_minutes=?,enabled=?,retention_days=?,min_full=?,auto_cleanup=?,next_run_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
-		job.Name, job.SourceID, job.TargetID, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), formatTime(job.UpdatedAt), job.ID, job.Revision)
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET name=?,source_id=?,target_id=?,timezone=?,schedule_type=?,time_of_day=?,weekday=?,interval_minutes=?,enabled=?,backup_type=?,retention_days=?,min_full=?,auto_cleanup=?,next_run_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
+		job.Name, job.SourceID, job.TargetID, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), formatTime(job.UpdatedAt), job.ID, job.Revision)
 	if err != nil {
 		return err
 	}
@@ -79,13 +79,13 @@ func (s *Store) GetJob(ctx context.Context, id string) (Job, error) {
 	return job, err
 }
 
-const jobSelect = `SELECT j.id,j.name,j.source_id,j.target_id,j.timezone,j.schedule_type,j.time_of_day,j.weekday,j.interval_minutes,j.enabled,j.retention_days,j.min_full,j.auto_cleanup,j.next_run_at,j.revision,j.created_at,j.updated_at FROM jobs j`
+const jobSelect = `SELECT j.id,j.name,j.source_id,j.target_id,j.timezone,j.schedule_type,j.time_of_day,j.weekday,j.interval_minutes,j.enabled,j.backup_type,j.retention_days,j.min_full,j.auto_cleanup,j.next_run_at,j.revision,j.created_at,j.updated_at FROM jobs j`
 
 func scanJob(row rowScanner) (Job, error) {
 	var job Job
 	var next sql.NullString
 	var created, updated string
-	err := row.Scan(&job.ID, &job.Name, &job.SourceID, &job.TargetID, &job.Timezone, &job.ScheduleType, &job.TimeOfDay, &job.Weekday, &job.IntervalMinutes, &job.Enabled, &job.RetentionDays, &job.MinFull, &job.AutoCleanup, &next, &job.Revision, &created, &updated)
+	err := row.Scan(&job.ID, &job.Name, &job.SourceID, &job.TargetID, &job.Timezone, &job.ScheduleType, &job.TimeOfDay, &job.Weekday, &job.IntervalMinutes, &job.Enabled, &job.BackupType, &job.RetentionDays, &job.MinFull, &job.AutoCleanup, &next, &job.Revision, &created, &updated)
 	if err != nil {
 		return Job{}, err
 	}

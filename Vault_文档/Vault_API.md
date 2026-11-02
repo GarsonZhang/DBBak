@@ -29,13 +29,13 @@ curl -b cookies.txt http://127.0.0.1:8080/api/v1/jobs
 | GET `/api/v1/overview` | 持久化统计与最近运行 | 200 |
 | GET `/api/v1/capabilities` | 本机工具与未实现能力矩阵 | 200 |
 | GET `/api/v1/settings` | 非敏感运行配置和密钥路径 | 200 |
-| GET/POST `/api/v1/sources` | MySQL/PostgreSQL 数据源；SQL Server 可登记但任务禁止创建 | 200/201 |
+| GET/POST `/api/v1/sources` | MySQL/PostgreSQL/SQL Server 数据源 | 200/201 |
 | PATCH `/api/v1/sources/{id}` | 编辑数据源，需 revision | 200 |
 | POST `/api/v1/sources/{id}/probe` | 真实连接与版本检测 | 200/422 |
 | GET/POST `/api/v1/storage-targets` | 本地目录列表/新增与写检查 | 200/201 |
 | PATCH `/api/v1/storage-targets/{id}` | 编辑仓库；有备份时禁止改根目录 | 200 |
 | POST `/api/v1/storage-targets/{id}/check` | 真实创建并删除写测试文件 | 200/422 |
-| GET/POST `/api/v1/jobs` | 全量任务列表/新增 | 200/201 |
+| GET/POST `/api/v1/jobs` | 任务列表/新增；`backup_type` 取 `full`/`differential`/`log`，非全量目前仅 SQL Server 支持 | 200/201 |
 | PATCH `/api/v1/jobs/{id}` | 调度、启停和保留配置，需 revision | 200 |
 | POST `/api/v1/jobs/{id}/runs` | 手动触发，支持 Idempotency-Key | 202/200 |
 | GET `/api/v1/runs?job_id=` | 运行列表 | 200 |
@@ -130,4 +130,4 @@ MySQL 单库转储不包含 CREATE DATABASE 和 USE；PostgreSQL base.tar 是整
 
 ## 未实现接口
 
-SQL Server 原生适配器代码已实现但标为 `unverified`，服务端禁止创建任务，真实恢复未运行。差异/日志产品 API、远程 Agent 控制端、NAS/S3、日志链自动清理和自动恢复执行没有生产 API。MySQL binlog 与 PostgreSQL WAL 已通过独立脚本验证，但尚未接入产品调度。访问未完成能力不得以前端模拟代替。
+SQL Server 原生全量已完成真实备份与异名恢复验收；任务创建受 `VAULT_SQLSERVER_ENABLED` 控制，默认关闭。差异/日志产品 API、远程 Agent 控制端、NAS/S3、日志链自动清理和自动恢复执行没有生产 API。MySQL binlog 与 PostgreSQL WAL 已通过独立脚本验证，但尚未接入产品调度。访问未完成能力不得以前端模拟代替。

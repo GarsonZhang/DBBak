@@ -219,16 +219,20 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 	messages := []string{}
 	capabilities := []map[string]string{}
 	for _, engine := range s.adapters.Engines() {
-		if engine == "sqlserver" {
-			continue // 实现已注册，但真实恢复未验收，不得标为 supported。
-		}
 		adapter, _ := s.adapters.ForEngine(engine)
 		version, err := adapter.Version(r.Context())
 		status := "supported"
-		method := map[string]string{"mysql": "mysqldump", "postgresql": "pg_basebackup"}[engine]
+		method := map[string]string{"mysql": "mysqldump", "postgresql": "pg_basebackup", "sqlserver": "BACKUP DATABASE"}[engine]
+		if engine == "sqlserver" && !s.config.SQLServerEnabled {
+			// 适配器已实现，但真实备份与异名恢复尚未验收，不得标为 supported。
+			status = "unverified"
+		}
 		if err != nil {
 			status = "prerequisite_missing"
-			executorStatus = status
+			// 只有已验收引擎缺少工具才算执行器整体不可用；SQL Server 本就未验收。
+			if engine != "sqlserver" {
+				executorStatus = status
+			}
 			messages = append(messages, backup.SafeErrorMessage(err))
 			version = ""
 		}
@@ -239,7 +243,6 @@ func (s *Server) capabilities(w http.ResponseWriter, r *http.Request) {
 		map[string]string{"engine": "mysql", "method": "binlog", "type": "log", "status": "unimplemented"},
 		map[string]string{"engine": "postgresql", "method": "WAL", "type": "log", "status": "unimplemented"},
 		map[string]string{"engine": "postgresql", "method": "pgBackRest", "type": "full", "status": "unimplemented"},
-		map[string]string{"engine": "sqlserver", "method": "native", "type": "full", "status": "unverified"},
 	)
 	writeJSON(w, http.StatusOK, map[string]any{"local_executor": map[string]any{"status": executorStatus, "tool_versions": versions, "message": strings.Join(messages, "；")}, "capabilities": capabilities})
 }

@@ -23,18 +23,25 @@ type SQLServerClient struct {
 func (c SQLServerClient) Engine() string { return "sqlserver" }
 
 // Version 返回 sqlcmd 工具版本，不代表数据库组合已通过恢复验收。
+// sqlcmd -? 输出整页帮助，这里只取包含 Version 的行，避免把帮助文本写进能力矩阵。
 func (c SQLServerClient) Version(ctx context.Context) (string, error) {
 	output, err := c.run(ctx, []string{"-?"}, "", "")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(output), nil
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "Version") {
+			return trimmed, nil
+		}
+	}
+	return "sqlcmd", nil
 }
 
 // Probe 使用真实 SQL 连接读取服务器版本。
 func (c SQLServerClient) Probe(ctx context.Context, source metadata.Source, password string) (string, error) {
 	args := c.connectionArgs(source)
-	args = append(args, "-d", "master", "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-Q", "SELECT @@VERSION;")
+	args = append(args, "-d", "master", "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-Q", "SET NOCOUNT ON; SELECT @@VERSION;")
 	output, err := c.run(ctx, args, password, "")
 	if err != nil {
 		return "", err
@@ -42,12 +49,36 @@ func (c SQLServerClient) Probe(ctx context.Context, source metadata.Source, pass
 	return strings.TrimSpace(output), nil
 }
 
-// Execute 在数据库服务路径生成 .bak，并在同主机的授权执行器目录校验文件。
-func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, target metadata.StorageTarget, password, workPath string) (ExecuteResult, error) {
+// Execute 按 full / differential / log 生成原生备份文件，并在同主机的授权执行器目录校验。
+func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, target metadata.StorageTarget, password, workPath string, spec BackupSpec) (ExecuteResult, error) {
+	kind := spec.Type
+	if kind == "" {
+		kind = "full"
+	}
+	extension := ".bak"
+	switch kind {
+	case "full":
+	case "differential":
+	case "log":
+		extension = ".trn"
+		// 事务日志备份要求 FULL 恢复模式；SIMPLE 下不提前拦截会得到晦涩的引擎错误。
+		model, err := c.recoveryModel(ctx, source, password)
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+		if !strings.EqualFold(model, "FULL") {
+			return ExecuteResult{}, &ToolError{
+				Code:    "RECOVERY_MODEL_NOT_FULL",
+				Message: "事务日志备份要求数据库处于 FULL 恢复模式，当前为 " + model,
+			}
+		}
+	default:
+		return ExecuteResult{}, &ToolError{Code: "BACKUP_TYPE_UNSUPPORTED", Message: "SQL Server 只支持 full、differential、log 三种备份类型"}
+	}
 	if target.ServerRoot == "" {
 		return ExecuteResult{}, &ToolError{Code: "SERVER_PATH_REQUIRED", Message: "SQL Server 原生备份必须配置数据库服务可访问的 server_root"}
 	}
-	name := filepath.Base(workPath) + ".bak"
+	name := filepath.Base(workPath) + extension
 	localOutput := filepath.Join(target.Root, name)
 	serverOutput := filepath.Join(target.ServerRoot, name)
 	if _, err := os.Stat(localOutput); err == nil {
@@ -58,8 +89,8 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 	if strings.ContainsRune(serverOutput, '\'') {
 		return ExecuteResult{}, &ToolError{Code: "SERVER_PATH_REJECTED", Message: "SQL Server 备份路径包含不安全字符"}
 	}
+	statement := backupStatement(kind, source.Database, serverOutput)
 	scriptPath := filepath.Join(workPath, "backup.sql")
-	statement := fmt.Sprintf("BACKUP DATABASE [%s] TO DISK = N'%s' WITH CHECKSUM;", source.Database, serverOutput)
 	if err := os.WriteFile(scriptPath, []byte(statement), 0o600); err != nil {
 		return ExecuteResult{}, err
 	}
@@ -71,23 +102,64 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 	if info, err := os.Stat(localOutput); err != nil || !info.Mode().IsRegular() {
 		return ExecuteResult{}, &ToolError{Code: "BACKUP_FILE_NOT_VISIBLE", Message: "BACKUP 返回成功，但执行器未在授权目录看到备份文件；请检查服务路径映射和权限"}
 	}
-	metadataQuery := fmt.Sprintf("SELECT TOP (1) backup_set_id, backup_lsn, database_backup_lsn FROM msdb.dbo.backupset WHERE database_name = '%s' AND type = 'D' ORDER BY backup_set_id DESC;", source.Database)
+	metadataQuery := backupMetadataQuery(source.Database, kind)
 	args = c.connectionArgs(source)
-	args = append(args, "-d", "msdb", "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-Q", metadataQuery)
+	args = append(args, "-d", "msdb", "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-Q", "SET NOCOUNT ON; "+metadataQuery)
 	output, err := c.run(ctx, args, password, "")
 	if err != nil {
 		return ExecuteResult{}, err
 	}
 	parts := strings.Split(strings.TrimSpace(output), "|")
-	if len(parts) != 3 {
-		return ExecuteResult{}, &ToolError{Code: "BACKUP_METADATA_MISSING", Message: "无法读取 SQL Server 全量备份 LSN 元数据"}
+	if len(parts) != 5 {
+		return ExecuteResult{}, &ToolError{Code: "BACKUP_METADATA_MISSING", Message: "无法读取 SQL Server 备份 LSN 元数据"}
 	}
 	engineMetadata, _ := json.Marshal(map[string]any{
-		"logical": false, "scope": "database", "format": "bak", "backup_type": "full",
-		"backup_set_id": strings.TrimSpace(parts[0]), "backup_lsn": strings.TrimSpace(parts[1]), "database_backup_lsn": strings.TrimSpace(parts[2]),
-		"server_path": serverOutput,
+		"logical": false, "scope": "database", "format": strings.TrimPrefix(extension, "."), "backup_type": kind,
+		"backup_set_id":       strings.TrimSpace(parts[0]),
+		"first_lsn":           strings.TrimSpace(parts[1]),
+		"last_lsn":            strings.TrimSpace(parts[2]),
+		"database_backup_lsn": strings.TrimSpace(parts[3]),
+		"checkpoint_lsn":      strings.TrimSpace(parts[4]),
+		"server_path":         serverOutput,
 	})
-	return ExecuteResult{ProducedPath: localOutput, Extension: ".bak", Method: "sqlserver_native", EngineMetadata: engineMetadata}, nil
+	return ExecuteResult{ProducedPath: localOutput, Extension: extension, Method: "sqlserver_native", EngineMetadata: engineMetadata}, nil
+}
+
+// backupStatement 生成对应类型的 BACKUP 语句；日志备份使用 BACKUP LOG。
+func backupStatement(kind, database, destination string) string {
+	switch kind {
+	case "differential":
+		return fmt.Sprintf("BACKUP DATABASE [%s] TO DISK = N'%s' WITH DIFFERENTIAL, CHECKSUM;", database, destination)
+	case "log":
+		return fmt.Sprintf("BACKUP LOG [%s] TO DISK = N'%s' WITH CHECKSUM;", database, destination)
+	default:
+		return fmt.Sprintf("BACKUP DATABASE [%s] TO DISK = N'%s' WITH CHECKSUM;", database, destination)
+	}
+}
+
+// recoveryModel 读取数据库恢复模式，用于在日志备份前给出明确前提判断。
+func (c SQLServerClient) recoveryModel(ctx context.Context, source metadata.Source, password string) (string, error) {
+	query := fmt.Sprintf("SET NOCOUNT ON; SELECT recovery_model_desc FROM sys.databases WHERE name = N'%s';", source.Database)
+	args := c.connectionArgs(source)
+	args = append(args, "-d", "master", "-b", "-r", "1", "-W", "-h", "-1", "-Q", query)
+	output, err := c.run(ctx, args, password, "")
+	if err != nil {
+		return "", err
+	}
+	model := strings.TrimSpace(output)
+	if model == "" {
+		return "", &ToolError{Code: "DATABASE_NOT_FOUND", Message: "无法读取数据库恢复模式，数据库可能不存在"}
+	}
+	return model, nil
+}
+
+// backupMetadataQuery 只查询 msdb.dbo.backupset 中真实存在的列。
+// SQL Server 没有 backup_lsn 列；差异与日志链依赖 database_backup_lsn 与序列号。
+func backupMetadataQuery(database, kind string) string {
+	// D=全量，I=差异，L=事务日志；类型必须与本次备份一致，否则会误取历史记录。
+	setType := map[string]string{"full": "D", "differential": "I", "log": "L"}[kind]
+	return fmt.Sprintf("SELECT TOP (1) backup_set_id, first_lsn, last_lsn, database_backup_lsn, checkpoint_lsn "+
+		"FROM msdb.dbo.backupset WHERE database_name = '%s' AND type = '%s' ORDER BY backup_set_id DESC;", database, setType)
 }
 
 func (c SQLServerClient) connectionArgs(source metadata.Source) []string {

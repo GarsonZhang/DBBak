@@ -17,7 +17,7 @@ type fakeMySQLTool struct {
 }
 
 func (f fakeMySQLTool) Engine() string { return "mysql" }
-func (f fakeMySQLTool) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string) (ExecuteResult, error) {
+func (f fakeMySQLTool) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string, _ BackupSpec) (ExecuteResult, error) {
 	path := filepath.Join(workPath, "dump.sql")
 	if err := f.dump(ctx, source, password, path); err != nil {
 		return ExecuteResult{}, err

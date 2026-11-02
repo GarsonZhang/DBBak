@@ -122,7 +122,7 @@ type Adapter interface {
 | --- | --- | --- |
 | MySQL | `mysqldump` | 单库逻辑全量，不带 `CREATE DATABASE`/`USE` |
 | PostgreSQL | `pg_basebackup --format=tar` | 整实例物理全量，含恢复所需 WAL |
-| SQL Server | `sqlcmd` + `BACKUP DATABASE` | 原生全量；能力状态 `unverified`，禁止建任务 |
+| SQL Server | `sqlcmd` + `BACKUP DATABASE` / `BACKUP LOG` | 全量、差异、事务日志；链式恢复已验证，任务需 `VAULT_SQLSERVER_ENABLED=1` |
 
 ## 8 关键设计决定
 
@@ -139,7 +139,7 @@ type Adapter interface {
 ## 9 已知约束与技术债
 
 - **单实例**：无分布式调度、无多租户、无高可用；SQLite 与进程生命周期绑定。
-- **SQL Server 未验证**：适配器与脚本已写，真实备份与异名恢复未运行，能力保持 `unverified`。
+- **SQL Server 恢复链只在脚本侧验证**：全量→差异→日志链式恢复已通过，但产品内没有按时间点选择的恢复 UI，链成员也不参与自动清理。
 - **日志链未产品化**：MySQL binlog 与 PostgreSQL WAL 已用独立脚本真实验证，但归档管理、恢复链和 PITR 未进入任务模型。
 - **Agent 只有客户端**：mTLS、一次性注册与 fence 已实现并测试，服务端 `/agent/v1` 未实现，无法接 Runner。
 - **单角色**：只有管理员，操作员与只读审计员未实现，权限边界靠服务端鉴权而非前端隐藏。

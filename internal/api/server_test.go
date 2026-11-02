@@ -92,7 +92,7 @@ func TestAuthenticationCSRFAndPersistentAPI(t *testing.T) {
 type fakeAPITool struct{}
 
 func (fakeAPITool) Engine() string { return "mysql" }
-func (fakeAPITool) Execute(context.Context, metadata.Source, metadata.StorageTarget, string, string) (backup.ExecuteResult, error) {
+func (fakeAPITool) Execute(context.Context, metadata.Source, metadata.StorageTarget, string, string, backup.BackupSpec) (backup.ExecuteResult, error) {
 	return backup.ExecuteResult{Extension: ".sql", Method: "mysqldump", EngineMetadata: []byte("{}")}, nil
 }
 

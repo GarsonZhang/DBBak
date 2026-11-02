@@ -51,6 +51,7 @@ type Job struct {
 	Weekday         int        `json:"weekday"`
 	IntervalMinutes int        `json:"interval_minutes"`
 	Enabled         bool       `json:"enabled"`
+	BackupType      string     `json:"backup_type"`
 	RetentionDays   int        `json:"retention_days"`
 	MinFull         int        `json:"min_full"`
 	AutoCleanup     bool       `json:"auto_cleanup"`

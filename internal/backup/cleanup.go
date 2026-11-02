@@ -154,6 +154,13 @@ func (c *CleanupService) evaluate(ctx context.Context, job metadata.Job, now tim
 		return CleanupResult{}, err
 	}
 	result := CleanupResult{JobID: job.ID, JobRevision: job.Revision}
+	// 恢复链感知：被差异或日志引用的全量不能删除，否则链尾文件将无法恢复。
+	hasDependent := make(map[string]bool, len(artifacts))
+	for _, artifact := range artifacts {
+		if artifact.ParentID != nil {
+			hasDependent[*artifact.ParentID] = true
+		}
+	}
 	verifiedFull := 0
 	for _, artifact := range artifacts {
 		if artifact.State == "deleted" {
@@ -165,8 +172,10 @@ func (c *CleanupService) evaluate(ctx context.Context, job metadata.Job, now tim
 			item.Reason = "未通过文件校验，保留待核查"
 		case artifact.Locked:
 			item.Reason = "人工锁定保留"
-		case artifact.ChainID == "" || artifact.ParentID != nil:
-			item.Reason = "恢复依赖信息不属于阶段一独立全量模型，停止自动判断"
+		case artifact.ParentID != nil:
+			item.Reason = "差异或日志属于恢复链成员，链感知清理未实现，保留"
+		case hasDependent[artifact.ID]:
+			item.Reason = "该全量仍被后续差异或日志依赖，保留"
 		case active:
 			item.Reason = "任务存在活动运行，整个预览保持保守"
 		case verifiedFull < job.MinFull:

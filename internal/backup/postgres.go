@@ -50,7 +50,10 @@ func (c PostgreSQLClient) Probe(ctx context.Context, source metadata.Source, pas
 }
 
 // Execute 生成包含必要 WAL 的 base.tar，恢复时可解包到独立实例目录。
-func (c PostgreSQLClient) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string) (ExecuteResult, error) {
+func (c PostgreSQLClient) Execute(ctx context.Context, source metadata.Source, _ metadata.StorageTarget, password, workPath string, spec BackupSpec) (ExecuteResult, error) {
+	if spec.Type != "" && spec.Type != "full" {
+		return ExecuteResult{}, &ToolError{Code: "BACKUP_TYPE_UNSUPPORTED", Message: "PostgreSQL 适配器当前只实现整实例物理全量，WAL 链未接入"}
+	}
 	identityQuery := `SELECT (SELECT system_identifier FROM pg_control_system()), (SELECT timeline_id FROM pg_control_checkpoint())`
 	identity, err := c.run(ctx, c.PSQLPath, c.sqlArgs(source, identityQuery), password)
 	if err != nil {

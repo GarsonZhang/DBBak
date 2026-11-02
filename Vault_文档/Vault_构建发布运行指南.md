@@ -178,7 +178,8 @@ Windows 下用 `Get-FileHash -Algorithm SHA256` 比对。**没有 Authenticode �
 | `VAULT_MASTER_KEY_FILE` | `<数据目录>/master.key` | AES-256 主密钥，**必须独立备份** |
 | `VAULT_MYSQL` / `VAULT_MYSQLDUMP` | `mysql` / `mysqldump` | MySQL 客户端 |
 | `VAULT_PSQL` / `VAULT_PG_BASEBACKUP` | `psql` / `pg_basebackup` | PostgreSQL 客户端 |
-| `VAULT_SQLCMD` | `sqlcmd` | SQL Server 适配器工具（能力仍为 unverified） |
+| `VAULT_SQLCMD` | `sqlcmd` | SQL Server 适配器工具 |
+| `VAULT_SQLSERVER_ENABLED` | 未设置（关闭） | 设为 `1` 才允许创建 SQL Server 任务；须先完成异名恢复验收 |
 | `VAULT_SESSION_TTL` | `12h` | 会话有效期 |
 | `VAULT_SCHEDULER_INTERVAL` | `2s` | 到期任务扫描间隔 |
 | `VAULT_BACKUP_TIMEOUT` | `30m` | 单次备份超时 |
@@ -236,6 +237,11 @@ $env:VAULT_ADDR = "127.0.0.1:8080"
 ```
 
 `serve` 是前台进程，Ctrl+C 即停止；关终端等于停服务。
+
+密码查看：
+```
+Get-Content .\.test-runtime\admin-password
+```
 
 ### 5.2 作为 Windows 服务（WinSW）
 

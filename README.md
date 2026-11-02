@@ -6,7 +6,7 @@ Vault 当前提供真实 MySQL 逻辑全量与 PostgreSQL 整实例物理全量�
 
 已实现并验证的能力仅以 `Vault_文档/Vault_兼容性矩阵.md`、`Vault_文档/Vault_阶段一验证报告.md` 和 `Vault_文档/Vault_阶段二PostgreSQL验证报告.md` 为准。
 
-边界：SQL Server 适配器已实现但真实恢复未运行，保持 unverified 且禁止创建任务。MySQL binlog 与 PostgreSQL WAL 时间点恢复已由独立脚本真实验证，但尚未接入产品调度；SQL Server 差异/日志未实现。远程 Agent 已有 mTLS 客户端和协议测试，控制端接口未接入。S3、日志链自动清理、正式 Windows 服务、Linux systemd 和 Docker 运行验收未完成。独立全量自动清理已实现。详细状态见 `Vault_文档/Vault_阶段三至五交付状态.md`。
+边界：SQL Server 原生全量已完成真实备份与异名恢复验收（SQL Server 2025 + sqlcmd），能力为 supported，任务创建由 `VAULT_SQLSERVER_ENABLED=1` 显式开启，默认关闭。MySQL binlog 与 PostgreSQL WAL 时间点恢复已由独立脚本真实验证，但尚未接入产品调度；SQL Server 已支持全量、差异与事务日志备份，并完成链式恢复验证，链成员暂不参与自动清理。远程 Agent 已有 mTLS 客户端和协议测试，控制端接口未接入。S3、日志链自动清理、正式 Windows 服务、Linux systemd 和 Docker 运行验收未完成。独立全量自动清理已实现。详细状态见 `Vault_文档/Vault_阶段三至五交付状态.md`。
 
 ## 构建与测试
 
@@ -118,4 +118,4 @@ ARCHITECTURE.md         模块边界、数据流与已知约束
 TASKS.md                完成、待办、阻塞和未运行项
 ```
 
-`internal/backup/` 同时包含 MySQL、PostgreSQL 与 SQL Server 适配器；SQL Server 仍为 `unverified`，不得据此创建任务。
+`internal/backup/` 同时包含 MySQL、PostgreSQL 与 SQL Server 适配器；SQL Server 已完成真实备份与异名恢复，需用 `VAULT_SQLSERVER_ENABLED=1` 开启任务创建，差异与日志未实现。

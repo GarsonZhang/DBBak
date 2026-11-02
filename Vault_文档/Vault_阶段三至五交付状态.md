@@ -5,7 +5,7 @@
 ## 总体结论
 
 - **阶段二 PostgreSQL**：真实全量与独立集群恢复已完成。
-- **阶段二 SQL Server**：适配器和隔离脚本已实现，**真实备份恢复未运行**，能力保持 `unverified`，API 禁止创建任务。
+- **阶段二 SQL Server**：已完成真实备份与异名恢复验收（SQL Server 2025 + sqlcmd，2026-11-02），能力为 `supported`；任务创建由 `VAULT_SQLSERVER_ENABLED` 显式门控，默认关闭。
 - **阶段三**：MySQL binlog 与 PostgreSQL WAL 时间点恢复脚本已真实验证；**尚未接入 Vault 产品 API 和调度器**。SQL Server 差异/日志未验证。
 - **阶段四**：远程 Agent 的 mTLS 客户端与协议有单元/回环测试，**控制端协议接口和 Runner 执行集成未完成**；独立全量自动清理已接入；NAS 仅本地路径，**S3 未实现**。
 - **阶段五**：Windows/Linux/Docker 与构建脚本已交付并通过静态检查，**服务安装、升级、systemd、Docker 运行均未执行**。
@@ -18,11 +18,17 @@
 
 - `SQLServerClient`：sqlcmd 版本、真实连接检测、原生全量、CHECKSUM、备份 LSN 元数据。
 - 存储目标新增 `server_root`，要求当前矩阵与执行器 root 指向同一实际目录，防止管理端路径被误当作数据库服务路径。
-- 能力矩阵显示 SQL Server `unverified`；任务创建被服务端拒绝，避免未验收能力产生成功记录。
+- 能力矩阵按 `VAULT_SQLSERVER_ENABLED` 返回 `unverified` 或 `supported`；开关默认关闭，避免未验收能力产生成功记录。
 - `sqlserver_test.go` 验证缺失工具、服务路径必填、受信任连接与 SQL 登录参数。
 - `scripts/phase2_sqlserver_verify.py` 使用 FILELISTONLY + WITH MOVE，不使用 REPLACE，强制隔离确认。
 
-未完成：真实 SQL Server 全量、异名恢复、LSN 恢复链、UI 开放和兼容性矩阵验收。
+已完成（2026-11-02，本机 SQL Server 2025 17.0.1000.7）：
+
+- 脚本 `phase2_sqlserver_verify.py` 输出 passed：备份 3,788,800 字节、SHA-256 校验、异名恢复 3 行 / 601.25 / 4 字段。
+- 产品路径 `run_b66efbfff38f5076c178fc7b`：state=succeeded、command=succeeded、file=verified、restore=verified，SHA-256 与磁盘一致。
+- 修复真实运行暴露的两个缺陷：`msdb.dbo.backupset` 不存在 `backup_lsn` 列；`sqlcmd -Q` 的行数统计污染最后一个 LSN 字段。
+
+未完成：SQL Server 差异、事务日志与 LSN 恢复链。
 
 ## 阶段三真实证据
 

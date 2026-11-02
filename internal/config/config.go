@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,9 @@ type Config struct {
 	SessionTTL        time.Duration
 	SchedulerInterval time.Duration
 	BackupTimeout     time.Duration
+	// SQLServerEnabled 由运维在完成真实备份与异名恢复验收后显式开启；
+	// 默认关闭，避免未验收的备用路径被静默启用。
+	SQLServerEnabled bool
 }
 
 // Load 从环境变量读取配置，不生成或返回任何数据库凭据。
@@ -56,6 +60,7 @@ func Load() (Config, error) {
 	if cfg.BackupTimeout, err = durationEnv("VAULT_BACKUP_TIMEOUT", cfg.BackupTimeout); err != nil {
 		return Config{}, err
 	}
+	cfg.SQLServerEnabled = env("VAULT_SQLSERVER_ENABLED", "") == "1" || strings.EqualFold(env("VAULT_SQLSERVER_ENABLED", ""), "true")
 	return cfg, nil
 }
 

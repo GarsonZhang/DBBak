@@ -20,6 +20,7 @@ type jobInput struct {
 	Weekday         int    `json:"weekday"`
 	IntervalMinutes int    `json:"interval_minutes"`
 	Enabled         bool   `json:"enabled"`
+	BackupType      string `json:"backup_type"`
 	RetentionDays   int    `json:"retention_days"`
 	MinFull         int    `json:"min_full"`
 	AutoCleanup     bool   `json:"auto_cleanup"`
@@ -105,7 +106,11 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 		Name: strings.TrimSpace(input.Name), SourceID: input.SourceID, TargetID: input.TargetID,
 		Timezone: input.Timezone, ScheduleType: input.ScheduleType, TimeOfDay: input.TimeOfDay,
 		Weekday: input.Weekday, IntervalMinutes: input.IntervalMinutes, Enabled: input.Enabled,
+		BackupType: strings.TrimSpace(input.BackupType),
 		RetentionDays: input.RetentionDays, MinFull: input.MinFull, AutoCleanup: input.AutoCleanup,
+	}
+	if job.BackupType == "" {
+		job.BackupType = "full"
 	}
 	if job.Name == "" || len(job.Name) > 100 {
 		return job, fmt.Errorf("任务名称必填且不超过 100 字符")
@@ -118,8 +123,19 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 	if err != nil {
 		return job, fmt.Errorf("数据源不存在")
 	}
-	if source.Engine == "sqlserver" {
-		return job, fmt.Errorf("SQL Server 适配器尚未完成真实备份恢复验收，当前禁止创建任务")
+	switch {
+	case job.BackupType == "full":
+	case job.BackupType == "differential" || job.BackupType == "log":
+		// 目前只有 SQL Server 适配器实现差异与日志；其他引擎必须明确拒绝，不能降级成全量。
+		if source.Engine != "sqlserver" {
+			return job, fmt.Errorf("差异与事务日志备份当前只支持 SQL Server，%s 仍只有全量", source.Engine)
+		}
+	default:
+		return job, fmt.Errorf("备份类型必须为 full、differential 或 log")
+	}
+	if source.Engine == "sqlserver" && !s.config.SQLServerEnabled {
+		// 未验收的备份路径不得默认启用；完成验证后由 VAULT_SQLSERVER_ENABLED=1 显式放开。
+		return job, fmt.Errorf("SQL Server 适配器已实现，但尚未通过真实备份与异名恢复验收；先执行 Vault_文档/Vault_SQLServer验证脚本说明.md 中的脚本，再设置 VAULT_SQLSERVER_ENABLED=1 重启")
 	}
 	if _, err := s.store.GetStorageTarget(r.Context(), job.TargetID); err != nil {
 		return job, fmt.Errorf("存储位置不存在")

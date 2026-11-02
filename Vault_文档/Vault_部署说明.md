@@ -18,7 +18,8 @@
 | VAULT_MYSQLDUMP | mysqldump | 真实 mysqldump 路径 |
 | VAULT_PSQL | psql | PostgreSQL 真实连接与能力检测客户端 |
 | VAULT_PG_BASEBACKUP | pg_basebackup | PostgreSQL 整实例物理全量工具 |
-| VAULT_SQLCMD | sqlcmd | SQL Server 适配器工具；真实恢复未验收，任务被禁止 |
+| VAULT_SQLCMD | sqlcmd | SQL Server 适配器工具 |
+| VAULT_SQLSERVER_ENABLED | 未设置 | 设为 1 才允许创建 SQL Server 任务；默认关闭，须先完成真实备份与异名恢复验收 |
 | VAULT_SESSION_TTL | 12h | 登录会话有效期 |
 | VAULT_SCHEDULER_INTERVAL | 2s | 到期任务检查间隔 |
 | VAULT_BACKUP_TIMEOUT | 30m | 单次备份超时 |

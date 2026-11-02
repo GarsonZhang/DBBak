@@ -88,7 +88,16 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if version > 3 {
+	if version < 4 {
+		// 备份类型属于任务配置；历史任务默认全量，保持既有行为不变。
+		if _, err = tx.ExecContext(ctx, "ALTER TABLE jobs ADD COLUMN backup_type TEXT NOT NULL DEFAULT 'full'"); err != nil {
+			return fmt.Errorf("执行迁移 4: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version,applied_at) VALUES(4,?)", formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version > 4 {
 		return fmt.Errorf("元数据库版本 %d 高于当前程序支持版本", version)
 	}
 	return tx.Commit()

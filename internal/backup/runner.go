@@ -107,6 +107,46 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		r.failRun(ctx, &run, nil, "ADAPTER_UNIMPLEMENTED", err.Error())
 		return
 	}
+	backupType := job.BackupType
+	if backupType == "" {
+		backupType = "full"
+	}
+	// 差异与日志必须先有已验证的全量基线，否则会生成无法恢复的孤立文件。
+	var base *metadata.Artifact
+	chainID := ""
+	if backupType != "full" {
+		recent, listErr := r.store.LatestVerifiedArtifacts(ctx, source.ID, target.ID, 50)
+		if listErr != nil {
+			r.failRun(ctx, &run, nil, "METADATA_ERROR", "无法读取恢复链基线")
+			return
+		}
+		var full *metadata.Artifact
+		for index := range recent {
+			if recent[index].Type == "full" {
+				full = &recent[index]
+				break
+			}
+		}
+		if full == nil {
+			r.failRun(ctx, &run, nil, "NO_BASE_BACKUP", "差异与日志备份需要至少一份已验证的全量基线，请先执行全量备份")
+			return
+		}
+		chainID = full.ChainID
+		if chainID == "" {
+			chainID = full.ID
+		}
+		base = full
+		if backupType == "log" {
+			// 日志接在链上最新对象之后，而不是固定接全量。
+			for index := range recent {
+				if recent[index].ChainID == chainID {
+					base = &recent[index]
+					break
+				}
+			}
+		}
+	}
+
 	now := time.Now().UTC()
 	run.State = "running"
 	run.CommandStatus = "running"
@@ -115,7 +155,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		log.Printf("更新运行 %s 开始状态失败: %v", run.ID, err)
 		return
 	}
-	r.log(ctx, run.ID, "INFO", "开始 "+source.Engine+" 全量备份")
+	r.log(ctx, run.ID, "INFO", "开始 "+source.Engine+" "+backupTypeLabel(backupType)+"备份")
 
 	root, err := PrepareRoot(target.Root)
 	if err != nil {
@@ -140,9 +180,15 @@ func (r *Runner) execute(parent context.Context, runID string) {
 
 	artifact := metadata.Artifact{
 		ID: metadata.NewID("art"), RunID: run.ID, JobID: job.ID, SourceID: source.ID, TargetID: target.ID,
-		Type: "full", State: "writing", ToolVersion: toolVersion, CreatedAt: now, EngineMetadata: []byte("{}"),
+		Type: backupType, State: "writing", ToolVersion: toolVersion, CreatedAt: now, EngineMetadata: []byte("{}"),
 	}
-	artifact.ChainID = artifact.ID
+	if backupType == "full" {
+		artifact.ChainID = artifact.ID
+	} else {
+		artifact.ChainID = chainID
+		parent := base.ID
+		artifact.ParentID = &parent
+	}
 	dateDir := now.Format("2006/01")
 	workRelative := source.Database + "/" + dateDir + "/." + run.ID + ".attempt-1"
 	artifact.RelativePath = workRelative
@@ -156,7 +202,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		return
 	}
 	workPath := filepath.Dir(placeholder)
-	result, err := adapter.Execute(ctx, source, target, password, workPath)
+	result, err := adapter.Execute(ctx, source, target, password, workPath, BackupSpec{Type: backupType})
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, ErrorCode(err), SafeErrorMessage(err))
 		return
@@ -216,6 +262,18 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		return
 	}
 	r.log(ctx, run.ID, "INFO", fmt.Sprintf("备份文件校验通过：%d 字节，SHA-256 %s", size, digest))
+}
+
+// backupTypeLabel 用于运行日志，避免把差异或日志写成“全量”。
+func backupTypeLabel(kind string) string {
+	switch kind {
+	case "differential":
+		return "差异"
+	case "log":
+		return "事务日志"
+	default:
+		return "全量"
+	}
 }
 
 func (r *Runner) failRun(ctx context.Context, run *metadata.Run, artifact *metadata.Artifact, code, message string) {

@@ -17,12 +17,18 @@ type ExecuteResult struct {
 	EngineMetadata json.RawMessage
 }
 
-// Adapter 是真实数据库全量适配器；差异、增量和日志不属于当前接口承诺。
+// BackupSpec 声明本次运行要执行的备份类型。
+// 差异与日志必须显式声明；不支持的引擎要明确失败，不能降级成全量冒充。
+type BackupSpec struct {
+	Type string // full | differential | log
+}
+
+// Adapter 是真实数据库备份适配器；是否支持差异或日志由各引擎实现决定。
 type Adapter interface {
 	Engine() string
 	Version(context.Context) (string, error)
 	Probe(context.Context, metadata.Source, string) (string, error)
-	Execute(context.Context, metadata.Source, metadata.StorageTarget, string, string) (ExecuteResult, error)
+	Execute(context.Context, metadata.Source, metadata.StorageTarget, string, string, BackupSpec) (ExecuteResult, error)
 }
 
 // Registry 按数据源引擎选择真实适配器，未知引擎不会被默认放行。
