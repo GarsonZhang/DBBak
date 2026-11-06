@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 func TestCleanupPreviewExecutionAndStaleProtection(t *testing.T) {
 	ctx := context.Background()
-	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "vault.db"))
+	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "dbbak.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestCleanupPreviewExecutionAndStaleProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewCleanupService(store)
+	service := NewCleanupService(store, nil)
 	result, preview, err := service.Preview(ctx, job.ID)
 	if err != nil {
 		t.Fatal(err)

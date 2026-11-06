@@ -18,19 +18,19 @@
 ## 验收通过后如何启用
 
 1. 本脚本输出 `passed`，且备份文件、目标库、行数与中文内容核对一致。
-2. 在 `Vault_文档/Vault_兼容性矩阵.md` 记录本次组合：管理端系统、SQL Server 版本、`sqlcmd` 版本、备份方式、验证日期。
-3. 设置 `VAULT_SQLSERVER_ENABLED=1` 并重启服务；此后能力状态变为 `supported`，允许创建任务。
-4. Windows 服务写入 `deploy/windows/vault-service.xml` 的 `<env>`，Linux 写入 `/etc/vault/vault.env`，Docker 写入 compose 的 `environment`。
+2. 在 `DBBak_文档/DBBak_兼容性矩阵.md` 记录本次组合：管理端系统、SQL Server 版本、`sqlcmd` 版本、备份方式、验证日期。
+3. 设置 `DBBAK_SQLSERVER_ENABLED=1` 并重启服务；此后能力状态变为 `supported`，允许创建任务。
+4. Windows 服务通过 `sc qc DBBak` 里的 ImagePath 参数或服务环境变量传递 `DBBAK_*`，Linux 写入 `/etc/dbbak/dbbak.env`，Docker 写入 compose 的 `environment`。
 5. 未完成上述验证时**不要**设置该变量：备份可能成功但恢复不可用，而这正是本项目禁止的“命令成功即视为可用”。
 
 ## 安全边界
 
 脚本 `scripts/phase2_sqlserver_verify.py` 具有以下约束：
 
-- 必须显式设置 `VAULT_TEST_SQLSERVER_CONFIRM_ISOLATED=YES`，否则拒绝运行。
+- 必须显式设置 `DBBAK_TEST_SQLSERVER_CONFIRM_ISOLATED=YES`，否则拒绝运行。
 - 备份、恢复和临时 SQL 文件必须位于同一个独立 SANDBOX_ROOT 下，不能是磁盘根目录。
-- 源库固定为 `vault_test_source`，只重建其中的 sample_records 样本表数据。
-- 每次生成唯一 `.bak` 文件和 `vault_test_restore_<时间>` 数据库，不覆盖旧文件或旧数据库。
+- 源库固定为 `dbbak_test_source`，只重建其中的 sample_records 样本表数据。
+- 每次生成唯一 `.bak` 文件和 `dbbak_test_restore_<时间>` 数据库，不覆盖旧文件或旧数据库。
 - 使用 `RESTORE FILELISTONLY` 获取逻辑文件名，通过 `WITH MOVE` 指定独立恢复文件路径。
 - 不使用 `REPLACE`，不删除旧恢复证据。
 - SQL 登录密码只通过 `SQLCMDPASSWORD` 环境变量传递，不在命令行使用 `-P`；默认使用 `-E` 受信任连接。
@@ -56,29 +56,29 @@
 Windows 受信任连接：
 
 ```powershell
-$env:VAULT_TEST_SQLCMD = "C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE"
-$env:VAULT_TEST_SQLSERVER_SERVER = "localhost\MSSQLSERVER"
-$env:VAULT_TEST_SQLSERVER_SANDBOX_ROOT = "D:\vault-sqlserver-isolated"
-$env:VAULT_TEST_SQLSERVER_CONFIRM_ISOLATED = "YES"
+$env:DBBAK_TEST_SQLCMD = "C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE"
+$env:DBBAK_TEST_SQLSERVER_SERVER = "localhost\MSSQLSERVER"
+$env:DBBAK_TEST_SQLSERVER_SANDBOX_ROOT = "D:\dbbak-sqlserver-isolated"
+$env:DBBAK_TEST_SQLSERVER_CONFIRM_ISOLATED = "YES"
 python scripts/phase2_sqlserver_verify.py
 ```
 
 SQL 登录方式：
 
 ```powershell
-$env:VAULT_TEST_SQLSERVER_USER = "vault_test"
+$env:DBBAK_TEST_SQLSERVER_USER = "dbbak_test"
 $env:SQLCMDPASSWORD = Read-Host "隔离测试密码"
 python scripts/phase2_sqlserver_verify.py
 Remove-Item Env:\SQLCMDPASSWORD
 ```
 
-脚本只创建/重建 `vault_test_source.dbo.sample_records` 的三行样本。不得把该脚本指向包含业务数据的同名数据库。
+脚本只创建/重建 `dbbak_test_source.dbo.sample_records` 的三行样本。不得把该脚本指向包含业务数据的同名数据库。
 
 ## 输出与后续接入
 
 成功输出包含备份方法、文件路径、大小、SHA-256、恢复数据库名、3 行、金额 601.25 和 4 个字段。脚本保留恢复证据，不自动清理。
 
-后续在隔离环境跑通后，才能实现并注册 SQL Server 适配器。届时还需在 Vault 数据源模型中明确区分：
+后续在隔离环境跑通后，才能实现并注册 SQL Server 适配器。届时还需在 DBBak 数据源模型中明确区分：
 
 - 管理服务路径。
 - 执行器路径。

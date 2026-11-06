@@ -2,14 +2,15 @@ package backup
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 
-	"vault/internal/metadata"
-	"vault/internal/security"
+	"dbbak/internal/metadata"
+	"dbbak/internal/security"
 )
 
 // Runner 使用持久化运行记录和有界队列执行本地备份。
@@ -97,16 +98,35 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		r.failRun(ctx, &run, nil, "SOURCE_NOT_FOUND", "数据源不存在")
 		return
 	}
-	target, err := r.store.GetStorageTarget(ctx, job.TargetID)
-	if err != nil {
-		r.failRun(ctx, &run, nil, "STORAGE_NOT_FOUND", "存储位置不存在")
-		return
+	// 备份位置类型在任务保存时已校验；运行前按类型准备目标，
+	// 不让错误配置在调度时刻才暴露成模糊失败。
+	var target metadata.StorageTarget
+	serverLocal := job.LocationKind == "database_server"
+	if serverLocal {
+		if source.Engine != "sqlserver" {
+			r.failRun(ctx, &run, nil, "UNSUPPORTED_LOCATION", "数据库服务器本地备份当前只支持 SQL Server 原生备份")
+			return
+		}
+		if !filepath.IsAbs(job.ServerDir) {
+			r.failRun(ctx, &run, nil, "SERVER_PATH_INVALID", "服务器目录必须是数据库服务器上的绝对路径")
+			return
+		}
+	} else {
+		var err error
+		target, err = r.store.GetStorageTarget(ctx, job.TargetID)
+		if err != nil {
+			r.failRun(ctx, &run, nil, "STORAGE_NOT_FOUND", "存储位置不存在")
+			return
+		}
 	}
-	adapter, err := r.adapters.ForEngine(source.Engine)
+	// 路线由任务固定：同一引擎的逻辑与物理路线恢复语义不同，不能按运行环境临时挑一个。
+	// 显式指定但未实现的路线直接失败，不静默回退到默认路线。
+	adapter, err := r.adapters.ForRoute(source.Engine, job.BackupMethod)
 	if err != nil {
 		r.failRun(ctx, &run, nil, "ADAPTER_UNIMPLEMENTED", err.Error())
 		return
 	}
+	routeMethod := RouteMethod(adapter)
 	backupType := job.BackupType
 	if backupType == "" {
 		backupType = "full"
@@ -115,7 +135,13 @@ func (r *Runner) execute(parent context.Context, runID string) {
 	var base *metadata.Artifact
 	chainID := ""
 	if backupType != "full" {
-		recent, listErr := r.store.LatestVerifiedArtifacts(ctx, source.ID, target.ID, 50)
+		var recent []metadata.Artifact
+		var listErr error
+		if serverLocal {
+			recent, listErr = r.store.LatestServerLocalArtifacts(ctx, source.ID, routeMethod, 50)
+		} else {
+			recent, listErr = r.store.LatestVerifiedArtifacts(ctx, source.ID, target.ID, routeMethod, 50)
+		}
 		if listErr != nil {
 			r.failRun(ctx, &run, nil, "METADATA_ERROR", "无法读取恢复链基线")
 			return
@@ -157,10 +183,54 @@ func (r *Runner) execute(parent context.Context, runID string) {
 	}
 	r.log(ctx, run.ID, "INFO", "开始 "+source.Engine+" "+backupTypeLabel(backupType)+"备份")
 
-	root, err := PrepareRoot(target.Root)
-	if err != nil {
-		r.failRun(ctx, &run, nil, "STORAGE_NOT_WRITABLE", err.Error())
-		return
+	var root string
+	ftpStorage := false
+	ossStorage := false
+	if serverLocal {
+		// 服务器本地模式：执行器不落盘，工作目录只承载给 sqlcmd 的脚本文件。
+		tempDir, mkErr := os.MkdirTemp("", "dbbak-run-")
+		if mkErr != nil {
+			r.failRun(ctx, &run, nil, "STORAGE_ERROR", "无法创建临时工作目录: "+mkErr.Error())
+			return
+		}
+		defer os.RemoveAll(tempDir)
+		root = tempDir
+	} else if target.Kind == "ftp" {
+		// FTP 模式：备份先落在临时目录，完成校验后上传并回读比对，本地副本随即删除。
+		if source.Engine == "sqlserver" {
+			r.failRun(ctx, &run, nil, "UNSUPPORTED_LOCATION", "SQL Server 原生备份无法写入 FTP，请使用数据库服务器本地目录或共享目录")
+			return
+		}
+		tempDir, mkErr := os.MkdirTemp("", "dbbak-ftp-")
+		if mkErr != nil {
+			r.failRun(ctx, &run, nil, "STORAGE_ERROR", "无法创建临时工作目录: "+mkErr.Error())
+			return
+		}
+		defer os.RemoveAll(tempDir)
+		root = tempDir
+		ftpStorage = true
+	} else if target.Kind == "oss" {
+		// 对象存储（S3 兼容 / 阿里云 OSS）：备份先落在执行器临时目录，上传校验通过后删除本地副本。
+		// SQL Server 原生备份由数据库服务写盘，执行器无法把产物上传，必须提前拒绝。
+		if source.Engine == "sqlserver" {
+			r.failRun(ctx, &run, nil, "UNSUPPORTED_LOCATION", "SQL Server 原生备份无法写入对象存储，请使用数据库服务器本地目录或共享目录")
+			return
+		}
+		tempDir, mkErr := os.MkdirTemp("", "dbbak-oss-")
+		if mkErr != nil {
+			r.failRun(ctx, &run, nil, "STORAGE_ERROR", "无法创建临时工作目录: "+mkErr.Error())
+			return
+		}
+		defer os.RemoveAll(tempDir)
+		root = tempDir
+		ossStorage = true
+	} else {
+		var err error
+		root, err = PrepareRoot(target.Root)
+		if err != nil {
+			r.failRun(ctx, &run, nil, "STORAGE_NOT_WRITABLE", err.Error())
+			return
+		}
 	}
 	toolVersion, err := adapter.Version(ctx)
 	if err != nil {
@@ -179,8 +249,11 @@ func (r *Runner) execute(parent context.Context, runID string) {
 	}
 
 	artifact := metadata.Artifact{
-		ID: metadata.NewID("art"), RunID: run.ID, JobID: job.ID, SourceID: source.ID, TargetID: target.ID,
-		Type: backupType, State: "writing", ToolVersion: toolVersion, CreatedAt: now, EngineMetadata: []byte("{}"),
+		ID: metadata.NewID("art"), RunID: run.ID, JobID: job.ID, SourceID: source.ID,
+		Type: backupType, BackupMethod: routeMethod, State: "writing", ToolVersion: toolVersion, CreatedAt: now, EngineMetadata: []byte("{}"),
+	}
+	if !serverLocal {
+		artifact.TargetID = target.ID
 	}
 	if backupType == "full" {
 		artifact.ChainID = artifact.ID
@@ -190,19 +263,35 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		artifact.ParentID = &parent
 	}
 	dateDir := now.Format("2006/01")
-	workRelative := source.Database + "/" + dateDir + "/." + run.ID + ".attempt-1"
+	// 子目录来自任务配置，运行前再规范化一次：即使配置被绕过校验写库，也不会把对象写出授权根目录。
+	subdir, err := NormalizeSubdir(job.Subdir)
+	if err != nil {
+		r.failRun(ctx, &run, nil, "SUBDIR_INVALID", err.Error())
+		return
+	}
+	workRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/."+run.ID+".attempt-1")
 	artifact.RelativePath = workRelative
 	if err = r.store.CreateArtifact(ctx, artifact); err != nil {
 		r.failRun(ctx, &run, nil, "METADATA_ERROR", "无法登记备份对象")
 		return
 	}
-	placeholder, err := SecurePath(root, workRelative+"/artifact.pending", false)
-	if err != nil {
-		r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", err.Error())
-		return
+	var workPath string
+	if serverLocal || ftpStorage || ossStorage {
+		workPath = root // 远程模式的临时工作目录，defer 已负责清理
+	} else {
+		placeholder, pathErr := SecurePath(root, workRelative+"/artifact.pending", false)
+		if pathErr != nil {
+			r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", pathErr.Error())
+			return
+		}
+		workPath = filepath.Dir(placeholder)
 	}
-	workPath := filepath.Dir(placeholder)
-	result, err := adapter.Execute(ctx, source, target, password, workPath, BackupSpec{Type: backupType})
+	adapterTarget := target
+	if serverLocal {
+		// 只把服务器目录与模式交给适配器：它据此拼 BACKUP 的 DISK 目标，不触碰执行器文件系统。
+		adapterTarget = metadata.StorageTarget{ID: "", Kind: "database_server", ServerRoot: job.ServerDir}
+	}
+	result, err := adapter.Execute(ctx, source, adapterTarget, password, workPath, BackupSpec{Type: backupType, Base: base})
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, ErrorCode(err), SafeErrorMessage(err))
 		return
@@ -218,12 +307,130 @@ func (r *Runner) execute(parent context.Context, runID string) {
 	}
 	r.log(ctx, run.ID, "INFO", result.Method+" 已完成，开始文件校验")
 
+	if result.ProducedPath == "" {
+		// 数据库服务器本地备份：文件不经过执行器，无法哈希校验。
+		// 以 msdb 登记的 backup_size 与 LSN 作为真实性凭证，产物标记为 uploaded（未校验），
+		// 删除与清理只清记录，远程文件需在数据库服务器上人工处理。
+		var meta map[string]any
+		if jsonErr := json.Unmarshal(result.EngineMetadata, &meta); jsonErr != nil {
+			r.failRun(ctx, &run, &artifact, "METADATA_ERROR", "无法解析备份元数据: "+jsonErr.Error())
+			return
+		}
+		size, _ := meta["backup_size"].(float64)
+		artifact.RelativePath = ArtifactRelativePath(subdir, source.Database, dateDir+"/"+run.ID+result.Extension)
+		artifact.Size = int64(size)
+		artifact.State = "uploaded"
+		if err = r.store.UpdateArtifact(ctx, artifact); err != nil {
+			r.failRun(ctx, &run, &artifact, "METADATA_ERROR", "备份已完成，但元数据提交失败，请人工核查")
+			return
+		}
+		finished := time.Now().UTC()
+		run.State = "succeeded"
+		run.FileStatus = "uploaded"
+		run.FinishedAt = &finished
+		if err = r.store.UpdateRun(ctx, run); err != nil {
+			log.Printf("提交运行 %s 成功状态失败: %v", run.ID, err)
+			return
+		}
+		r.log(ctx, run.ID, "INFO", fmt.Sprintf("数据库服务器本地备份完成：%d 字节（未校验，文件位于服务器目录 %s）", artifact.Size, job.ServerDir))
+		return
+	}
+
 	size, digest, err := HashFile(result.ProducedPath)
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, "FILE_VERIFICATION_FAILED", err.Error())
 		return
 	}
-	finalRelative := source.Database + "/" + dateDir + "/" + run.ID + result.Extension
+	finalRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/"+run.ID+result.Extension)
+
+	if ftpStorage {
+		// FTP：上传后整文件回读比对哈希，通过才登记 verified；本地副本随即删除。
+		cipher, secretErr := r.store.StoragePassword(ctx, target.ID)
+		if secretErr != nil {
+			r.failRun(ctx, &run, &artifact, "SECRET_NOT_FOUND", "读取存储凭据失败: "+secretErr.Error())
+			return
+		}
+		ftpPassword, decryptErr := r.secrets.Decrypt(cipher)
+		if decryptErr != nil {
+			r.failRun(ctx, &run, &artifact, "SECRET_UNAVAILABLE", "存储凭据解密失败，请检查独立主密钥")
+			return
+		}
+		conn, dialErr := dialFTP(target, ftpPassword)
+		if dialErr != nil {
+			r.failRun(ctx, &run, &artifact, "STORAGE_ERROR", dialErr.Error())
+			return
+		}
+		remotePath, uploadErr := ftpUploadVerified(conn, target, result.ProducedPath, finalRelative)
+		_ = conn.Quit()
+		if uploadErr != nil {
+			r.failRun(ctx, &run, &artifact, "STORAGE_ERROR", uploadErr.Error())
+			return
+		}
+		_ = os.Remove(result.ProducedPath)
+		verifiedAt := time.Now().UTC()
+		artifact.RelativePath = finalRelative
+		artifact.Size = size
+		artifact.SHA256 = digest
+		artifact.State = "verified"
+		artifact.VerifiedAt = &verifiedAt
+		if err = r.store.UpdateArtifact(ctx, artifact); err != nil {
+			r.failRun(ctx, &run, &artifact, "METADATA_ERROR", "备份文件已上传，但元数据提交失败，请人工核查")
+			return
+		}
+		finished := time.Now().UTC()
+		run.State = "succeeded"
+		run.FileStatus = "verified"
+		run.FinishedAt = &finished
+		if err = r.store.UpdateRun(ctx, run); err != nil {
+			log.Printf("提交运行 %s 成功状态失败: %v", run.ID, err)
+			return
+		}
+		r.log(ctx, run.ID, "INFO", fmt.Sprintf("备份已上传并回读校验通过：%d 字节，SHA-256 %s，远端 %s", size, digest, remotePath))
+		return
+	}
+
+	if ossStorage {
+		// 对象存储：上传后以服务端返回的长度与 ETag 复核，通过才登记 verified；本地副本随即删除。
+		// 注意校验等级：单次 PUT 的 ETag 是 MD5，可确认内容；多段上传的 ETag 不是整文件摘要，
+		// 只能确认长度，这一点必须写进运行日志，不能含糊成"校验通过"。
+		cipher, secretErr := r.store.StoragePassword(ctx, target.ID)
+		if secretErr != nil {
+			r.failRun(ctx, &run, &artifact, "SECRET_NOT_FOUND", "读取存储凭据失败: "+secretErr.Error())
+			return
+		}
+		secret, decryptErr := r.secrets.Decrypt(cipher)
+		if decryptErr != nil {
+			r.failRun(ctx, &run, &artifact, "SECRET_UNAVAILABLE", "存储凭据解密失败，请检查独立主密钥")
+			return
+		}
+		objectKey, verifyNote, uploadErr := ossUploadVerified(ctx, target, secret, result.ProducedPath, finalRelative)
+		if uploadErr != nil {
+			r.failRun(ctx, &run, &artifact, "STORAGE_ERROR", uploadErr.Error())
+			return
+		}
+		_ = os.Remove(result.ProducedPath)
+		verifiedAt := time.Now().UTC()
+		artifact.RelativePath = finalRelative
+		artifact.Size = size
+		artifact.SHA256 = digest
+		artifact.State = "verified"
+		artifact.VerifiedAt = &verifiedAt
+		if err = r.store.UpdateArtifact(ctx, artifact); err != nil {
+			r.failRun(ctx, &run, &artifact, "METADATA_ERROR", "备份文件已上传，但元数据提交失败，请人工核查")
+			return
+		}
+		finished := time.Now().UTC()
+		run.State = "succeeded"
+		run.FileStatus = "verified"
+		run.FinishedAt = &finished
+		if err = r.store.UpdateRun(ctx, run); err != nil {
+			log.Printf("提交运行 %s 成功状态失败: %v", run.ID, err)
+			return
+		}
+		r.log(ctx, run.ID, "INFO", fmt.Sprintf("备份已上传对象存储：%d 字节，SHA-256 %s，%s，对象 %s/%s", size, digest, verifyNote, target.Bucket, objectKey))
+		return
+	}
+
 	finalPath, err := SecurePath(root, finalRelative, false)
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", err.Error())

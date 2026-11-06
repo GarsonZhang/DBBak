@@ -7,7 +7,7 @@ umask 022
 project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # Go 模块根位于仓库根目录，构建在根下执行，产物写入 dist/。
 [[ -f "$project_root/go.mod" ]] || { echo "未找到 $project_root/go.mod，模块根应位于仓库根目录。" >&2; exit 2; }
-version=${VERSION:-0.2.0-phase2}
+version=${VERSION:-0.2.0-phase5}
 export GOTOOLCHAIN=go1.27.3
 export GOWORK=off
 export CGO_ENABLED=0
@@ -19,8 +19,8 @@ goarch=${GOARCH:-$(go env GOARCH)}
 [[ $goarch == 'amd64' || $goarch == 'arm64' ]] || { echo '仅支持 GOARCH=amd64 或 arm64。' >&2; exit 2; }
 
 output_dir=${OUTPUT_DIR:-"$project_root/dist/$version/${goos}_${goarch}"}
-binary=vault
-[[ $goos == 'windows' ]] && binary=vault.exe
+binary=dbbak
+[[ $goos == 'windows' ]] && binary=dbbak.exe
 mkdir -p -- "$output_dir"
 temp_binary="$output_dir/.$binary.tmp.$$"
 cleanup() { rm -f -- "$temp_binary"; }
@@ -31,7 +31,7 @@ export GOARCH=$goarch
 (
     cd "$project_root"
     go build -mod=readonly -trimpath -buildvcs=false \
-        -ldflags='-s -w -buildid=' -o "$temp_binary" ./cmd/vault
+        -ldflags='-s -w -buildid=' -o "$temp_binary" ./cmd/dbbak
 )
 mv -f -- "$temp_binary" "$output_dir/$binary"
 chmod 0755 "$output_dir/$binary"

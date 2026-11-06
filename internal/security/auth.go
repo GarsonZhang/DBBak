@@ -9,10 +9,17 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// HashPassword 使用 bcrypt 哈希管理员密码，拒绝空密码和超过 72 字节的输入。
+// MinPasswordLength 是管理员密码的最小长度（字符数，按 UTF-8 字节计）。
+// 安装向导、初始化命令与密码哈希共用同一上限来源，避免各写一份后不一致。
+const MinPasswordLength = 6
+
+// HashPassword 使用 bcrypt 哈希管理员密码，拒绝过短密码和超过 72 字节的输入。
 func HashPassword(password string) (string, error) {
-	if len(password) < 12 {
-		return "", fmt.Errorf("密码至少 12 字节")
+	if len(password) < MinPasswordLength {
+		return "", fmt.Errorf("密码至少 %d 个字符", MinPasswordLength)
+	}
+	if len(password) > 72 {
+		return "", fmt.Errorf("密码不能超过 72 字节（bcrypt 上限）")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(hash), err

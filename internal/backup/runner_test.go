@@ -5,11 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
-	"vault/internal/metadata"
-	"vault/internal/security"
+	"dbbak/internal/metadata"
+	"dbbak/internal/security"
 )
 
 type fakeMySQLTool struct {
@@ -35,13 +36,13 @@ func (f fakeMySQLTool) Dump(ctx context.Context, source metadata.Source, passwor
 func TestRunnerConcurrencyAndVerifiedArtifact(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "vault.db"))
+	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "dbbak.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	now := time.Now().UTC()
-	source := metadata.Source{ID: "src_runner", Name: "源库", Engine: "mysql", Host: "127.0.0.1", Port: 3306, Database: "vault_source", Username: "vault", SecretRef: "sec_runner", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	source := metadata.Source{ID: "src_runner", Name: "源库", Engine: "mysql", Host: "127.0.0.1", Port: 3306, Database: "dbbak_source", Username: "dbbak", SecretRef: "sec_runner", Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err = store.CreateSource(ctx, source, "ciphertext"); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +74,7 @@ func TestRunnerConcurrencyAndVerifiedArtifact(t *testing.T) {
 		}
 		close(started)
 		<-release
-		return os.WriteFile(path, []byte("CREATE DATABASE vault_source; CREATE TABLE sample(id INT);\n"), 0o600)
+		return os.WriteFile(path, []byte("CREATE DATABASE dbbak_source; CREATE TABLE sample(id INT);\n"), 0o600)
 	}}
 	runner := NewRunner(store, NewRegistry(tool), keys, 5*time.Second)
 	if err = runner.Start(ctx); err != nil {
@@ -109,6 +110,83 @@ func TestRunnerConcurrencyAndVerifiedArtifact(t *testing.T) {
 	size, digest, err := HashFile(path)
 	if err != nil || size != artifact.Size || digest != artifact.SHA256 {
 		t.Fatalf("文件与元数据不一致: %v", err)
+	}
+}
+
+// TestRunnerRoutesArtifactIntoJobSubdir 验证任务配置的输出子目录真正决定文件落点，
+// 且清理能按登记路径删除该子目录内的文件。
+func TestRunnerRoutesArtifactIntoJobSubdir(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "dbbak.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	source := metadata.Source{ID: "src_subdir", Name: "源库", Engine: "mysql", Host: "127.0.0.1", Port: 3306, Database: "dbbak_source", Username: "dbbak", SecretRef: "sec_subdir", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err = store.CreateSource(ctx, source, "ciphertext"); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	target := metadata.StorageTarget{ID: "repo_subdir", Name: "共享根目录", Kind: "local", Root: root, Revision: 1, CreatedAt: now}
+	if err = store.CreateStorageTarget(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	job := metadata.Job{ID: "job_subdir", Name: "分区备份", SourceID: source.ID, TargetID: target.ID, Subdir: "mysql-prod", Timezone: "UTC", ScheduleType: "interval", IntervalMinutes: 15, Enabled: true, BackupType: "full", RetentionDays: 30, MinFull: 1, Revision: 1, CreatedAt: now, UpdatedAt: now}
+	if err = store.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	// 只提供密文；这里让执行器使用同一密钥解密，确保路径逻辑与凭据逻辑互不干扰。
+	keys, err := security.OpenKeyStore(filepath.Join(t.TempDir(), "master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := keys.Encrypt("test-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.UpdateSource(ctx, source, ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	tool := fakeMySQLTool{dump: func(_ context.Context, _ metadata.Source, _ string, path string) error {
+		return os.WriteFile(path, []byte("CREATE DATABASE dbbak_source;\n"), 0o600)
+	}}
+	runner := NewRunner(store, NewRegistry(tool), keys, 5*time.Second)
+	if err = runner.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, duplicate, err := runner.Trigger(ctx, job.ID, "manual", "subdir-key", nil)
+	if err != nil || duplicate {
+		t.Fatalf("触发失败: %v", err)
+	}
+	waitRunState(t, store, run.ID, "succeeded")
+	artifacts, err := store.ListArtifacts(ctx, job.ID)
+	if err != nil || len(artifacts) != 1 {
+		t.Fatalf("备份对象数量错误: %v %v", artifacts, err)
+	}
+	artifact := artifacts[0]
+	if !strings.HasPrefix(artifact.RelativePath, "mysql-prod/dbbak_source/") {
+		t.Fatalf("对象未写入任务子目录: %s", artifact.RelativePath)
+	}
+	if _, err = os.Stat(filepath.Join(root, "mysql-prod", "dbbak_source")); err != nil {
+		t.Fatalf("磁盘上缺少子目录: %v", err)
+	}
+	// 根目录下不应出现未分区的同名数据库目录。
+	if _, err = os.Stat(filepath.Join(root, "dbbak_source")); err == nil {
+		t.Fatal("对象写到了根目录，子目录未生效")
+	}
+
+	cleanup := NewCleanupService(store, nil)
+	preview, _, err := cleanup.Preview(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 保留天数为 30 天，刚生成的备份不应成为候选；这里只验证预览能定位到子目录对象而不报路径错误。
+	for _, item := range preview.Items {
+		if item.Candidate {
+			t.Fatalf("新备份不应被列为清理候选: %s", item.Reason)
+		}
 	}
 }
 

@@ -9,14 +9,14 @@ import (
 )
 
 func TestPersistenceAndRunIdempotency(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "vault.db")
+	path := filepath.Join(t.TempDir(), "dbbak.db")
 	ctx := context.Background()
 	store, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	source := Source{ID: "src_test", Name: "测试", Engine: "mysql", Host: "127.0.0.1", Port: 3306, Database: "vault_source", Username: "vault", SecretRef: "sec_test", Revision: 1, CreatedAt: now, UpdatedAt: now}
+	source := Source{ID: "src_test", Name: "测试", Engine: "mysql", Host: "127.0.0.1", Port: 3306, Database: "dbbak_source", Username: "dbbak", SecretRef: "sec_test", Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err = store.CreateSource(ctx, source, "encrypted-test-value"); err != nil {
 		t.Fatal(err)
 	}

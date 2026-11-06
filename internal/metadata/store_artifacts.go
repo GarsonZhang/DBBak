@@ -13,8 +13,8 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact Artifact) error {
 	if len(artifact.EngineMetadata) == 0 {
 		artifact.EngineMetadata = []byte("{}")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO artifacts(id,run_id,job_id,source_id,target_id,chain_id,parent_id,type,method,relative_path,size,sha256,state,locked,tool_version,engine_metadata,created_at,verified_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		artifact.ID, artifact.RunID, artifact.JobID, artifact.SourceID, artifact.TargetID, artifact.ChainID, artifact.ParentID, artifact.Type, artifact.Method, artifact.RelativePath, artifact.Size, artifact.SHA256, artifact.State, artifact.Locked, artifact.ToolVersion, artifact.EngineMetadata, formatTime(artifact.CreatedAt), nullableTime(artifact.VerifiedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO artifacts(id,run_id,job_id,source_id,target_id,chain_id,parent_id,type,method,backup_method,relative_path,size,sha256,state,locked,tool_version,engine_metadata,created_at,verified_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		artifact.ID, artifact.RunID, artifact.JobID, artifact.SourceID, nullableString(artifact.TargetID), artifact.ChainID, artifact.ParentID, artifact.Type, artifact.Method, artifact.BackupMethod, artifact.RelativePath, artifact.Size, artifact.SHA256, artifact.State, artifact.Locked, artifact.ToolVersion, artifact.EngineMetadata, formatTime(artifact.CreatedAt), nullableTime(artifact.VerifiedAt))
 	return err
 }
 
@@ -47,13 +47,51 @@ func (s *Store) DeleteArtifactRecord(ctx context.Context, id string) error {
 
 // ListArtifacts 查询文件记录；jobID 为空时返回全部。
 // LatestVerifiedArtifacts 返回指定数据源与仓库下最近的已校验对象，用于确定差异与日志的基线。
-func (s *Store) LatestVerifiedArtifacts(ctx context.Context, sourceID, targetID string, limit int) ([]Artifact, error) {
+// backupMethod 非空时只返回同一备份路线的对象：逻辑与物理产物不能互为基线。
+func (s *Store) LatestVerifiedArtifacts(ctx context.Context, sourceID, targetID, backupMethod string, limit int) ([]Artifact, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, artifactSelect+
-		` WHERE a.source_id=? AND a.target_id=? AND a.state='verified' ORDER BY a.created_at DESC LIMIT ?`,
-		sourceID, targetID, limit)
+	query := artifactSelect + ` WHERE a.source_id=? AND a.target_id=? AND a.state='verified'`
+	args := []any{sourceID, targetID}
+	if backupMethod != "" {
+		query += ` AND a.backup_method=?`
+		args = append(args, backupMethod)
+	}
+	query += ` ORDER BY a.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]Artifact, 0, limit)
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, artifact)
+	}
+	return result, rows.Err()
+}
+
+// LatestServerLocalArtifacts 返回指定数据源下最近的「数据库服务器本地」对象。
+// 这类对象不经过执行器磁盘，无法哈希校验，只能以 'uploaded' 状态存在；
+// 但其 msdb LSN 元数据由数据库服务在备份成功后登记，可作为差异与日志的真实基线。
+func (s *Store) LatestServerLocalArtifacts(ctx context.Context, sourceID, backupMethod string, limit int) ([]Artifact, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := artifactSelect + ` WHERE a.source_id=? AND a.target_id IS NULL AND a.state IN ('verified','uploaded')`
+	args := []any{sourceID}
+	if backupMethod != "" {
+		query += ` AND a.backup_method=?`
+		args = append(args, backupMethod)
+	}
+	query += ` ORDER BY a.created_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -102,16 +140,17 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (Artifact, error) {
 	return artifact, err
 }
 
-const artifactSelect = `SELECT a.id,a.run_id,a.job_id,a.source_id,a.target_id,a.chain_id,a.parent_id,a.type,a.method,a.relative_path,a.size,a.sha256,a.state,a.locked,a.tool_version,a.engine_metadata,a.created_at,a.verified_at FROM artifacts a`
+const artifactSelect = `SELECT a.id,a.run_id,a.job_id,a.source_id,a.target_id,a.chain_id,a.parent_id,a.type,a.method,a.backup_method,a.relative_path,a.size,a.sha256,a.state,a.locked,a.tool_version,a.engine_metadata,a.created_at,a.verified_at FROM artifacts a`
 
 func scanArtifact(row rowScanner) (Artifact, error) {
 	var artifact Artifact
-	var parent, verified sql.NullString
+	var parent, verified, targetID sql.NullString
 	var created, engineMetadata string
-	err := row.Scan(&artifact.ID, &artifact.RunID, &artifact.JobID, &artifact.SourceID, &artifact.TargetID, &artifact.ChainID, &parent, &artifact.Type, &artifact.Method, &artifact.RelativePath, &artifact.Size, &artifact.SHA256, &artifact.State, &artifact.Locked, &artifact.ToolVersion, &engineMetadata, &created, &verified)
+	err := row.Scan(&artifact.ID, &artifact.RunID, &artifact.JobID, &artifact.SourceID, &targetID, &artifact.ChainID, &parent, &artifact.Type, &artifact.Method, &artifact.BackupMethod, &artifact.RelativePath, &artifact.Size, &artifact.SHA256, &artifact.State, &artifact.Locked, &artifact.ToolVersion, &engineMetadata, &created, &verified)
 	if err != nil {
 		return Artifact{}, err
 	}
+	artifact.TargetID = targetID.String
 	artifact.EngineMetadata = []byte(engineMetadata)
 	if parent.Valid {
 		artifact.ParentID = &parent.String

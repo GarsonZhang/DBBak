@@ -18,7 +18,7 @@ import time
 from phase1_api_verify import API, require_file, RUNTIME
 
 ROOT = Path(__file__).resolve().parents[1]
-HOME = Path(os.environ.get("VAULT_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
+HOME = Path(os.environ.get("DBBAK_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
 RESTORE = RUNTIME / "pg-restore-data"
 RESTORE_PORT = 35433
 
@@ -34,9 +34,9 @@ def run_command(args: list[object], **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run([str(arg) for arg in args], check=True, **kwargs)
 
 
-def psql(sql: str, database: str = "vault_app", port: int = RESTORE_PORT) -> str:
+def psql(sql: str, database: str = "dbbak_app", port: int = RESTORE_PORT) -> str:
     env = pg_env()
-    result = run_command([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={port}", "--username=vault_pg", f"--dbname={database}", "--tuples-only", "--no-psqlrc", "--command=" + sql], env=env, stdout=subprocess.PIPE, text=True, encoding="utf-8")
+    result = run_command([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={port}", "--username=dbbak_pg", f"--dbname={database}", "--tuples-only", "--no-psqlrc", "--command=" + sql], env=env, stdout=subprocess.PIPE, text=True, encoding="utf-8")
     return result.stdout.strip().replace(" | ", "|")
 
 
@@ -52,7 +52,7 @@ def safe_extract(archive: Path, destination: Path) -> None:
             if path.is_absolute() or ".." in path.parts or member.issym() or member.islnk() or member.isdev():
                 raise AssertionError(f"备份 tar 包含不安全对象: {member.name}")
         tar.extractall(destination, filter="data")
-    (destination / ".vault-isolated-restore").write_text("phase2 isolated restore", encoding="ascii")
+    (destination / ".dbbak-isolated-restore").write_text("phase2 isolated restore", encoding="ascii")
 
 
 def wait_ready(process: subprocess.Popen) -> None:
@@ -60,7 +60,7 @@ def wait_ready(process: subprocess.Popen) -> None:
     while time.time() < deadline:
         if process.poll() is not None:
             raise AssertionError(f"恢复集群提前退出，退出码 {process.returncode}")
-        result = subprocess.run([HOME / "bin/pg_isready.exe", "--host=127.0.0.1", f"--port={RESTORE_PORT}", "--username=vault_pg", "--dbname=vault_app"], env=pg_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run([HOME / "bin/pg_isready.exe", "--host=127.0.0.1", f"--port={RESTORE_PORT}", "--username=dbbak_pg", "--dbname=dbbak_app"], env=pg_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if result.returncode == 0:
             return
         time.sleep(0.5)
@@ -75,13 +75,13 @@ def main() -> None:
     source = None
     _, sources = api.call("GET", "/api/v1/sources")
     for item in sources:
-        if item["name"] == "Vault 隔离 PostgreSQL 18":
+        if item["name"] == "DBBak 隔离 PostgreSQL 18":
             source = item
             break
     if source is None:
         _, source = api.call("POST", "/api/v1/sources", {
-            "name": "Vault 隔离 PostgreSQL 18", "engine": "postgresql", "host": "127.0.0.1", "port": 35432,
-            "database": "postgres", "username": "vault_pg", "password": require_file(RUNTIME / "pg-password"),
+            "name": "DBBak 隔离 PostgreSQL 18", "engine": "postgresql", "host": "127.0.0.1", "port": 35432,
+            "database": "postgres", "username": "dbbak_pg", "password": require_file(RUNTIME / "pg-password"),
         }, expected=(201,))
     _, probe = api.call("POST", f"/api/v1/sources/{source['id']}/probe", {})
     if "PostgreSQL 18.6" not in probe["server_version"] or probe["backup_type"] != "physical_cluster_full":
@@ -89,13 +89,13 @@ def main() -> None:
 
     wrong = None
     for item in sources:
-        if item["name"] == "Vault PostgreSQL 错误密码负向验证":
+        if item["name"] == "DBBak PostgreSQL 错误密码负向验证":
             wrong = item
             break
     if wrong is None:
         _, wrong = api.call("POST", "/api/v1/sources", {
-            "name": "Vault PostgreSQL 错误密码负向验证", "engine": "postgresql", "host": "127.0.0.1", "port": 35432,
-            "database": "postgres", "username": "vault_pg", "password": "intentionally-wrong-test-password",
+            "name": "DBBak PostgreSQL 错误密码负向验证", "engine": "postgresql", "host": "127.0.0.1", "port": 35432,
+            "database": "postgres", "username": "dbbak_pg", "password": "intentionally-wrong-test-password",
         }, expected=(201,))
     _, error = api.call("POST", f"/api/v1/sources/{wrong['id']}/probe", {}, expected=(422,))
     if error["code"] != "AUTH_FAILED":
@@ -104,20 +104,20 @@ def main() -> None:
     target = None
     _, targets = api.call("GET", "/api/v1/storage-targets")
     for item in targets:
-        if item["name"] == "Vault PostgreSQL 隔离目录":
+        if item["name"] == "DBBak PostgreSQL 隔离目录":
             target = item
             break
     if target is None:
-        _, target = api.call("POST", "/api/v1/storage-targets", {"name": "Vault PostgreSQL 隔离目录", "kind": "local", "root": str(RUNTIME / "pg-backup-root")}, expected=(201,))
+        _, target = api.call("POST", "/api/v1/storage-targets", {"name": "DBBak PostgreSQL 隔离目录", "kind": "local", "root": str(RUNTIME / "pg-backup-root")}, expected=(201,))
     job = None
     _, jobs = api.call("GET", "/api/v1/jobs")
     for item in jobs:
-        if item["name"] == "Vault 隔离 PostgreSQL 全实例":
+        if item["name"] == "DBBak 隔离 PostgreSQL 全实例":
             job = item
             break
     if job is None:
         _, job = api.call("POST", "/api/v1/jobs", {
-            "name": "Vault 隔离 PostgreSQL 全实例", "source_id": source["id"], "target_id": target["id"],
+            "name": "DBBak 隔离 PostgreSQL 全实例", "source_id": source["id"], "target_id": target["id"],
             "timezone": "Asia/Shanghai", "schedule_type": "interval", "time_of_day": "02:00", "weekday": 0,
             "interval_minutes": 60, "enabled": False, "retention_days": 30, "min_full": 1, "auto_cleanup": False,
         }, expected=(201,))
@@ -165,7 +165,7 @@ def main() -> None:
         subprocess.run([HOME / "bin/pg_ctl.exe", "-D", RESTORE, "--wait", "--mode=fast", "stop"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         process.wait(timeout=30)
     _, current = api.call("POST", f"/api/v1/runs/{run['id']}/restore-verification", {
-        "status": "verified", "target": f"postgresql://127.0.0.1:{RESTORE_PORT}/vault_app",
+        "status": "verified", "target": f"postgresql://127.0.0.1:{RESTORE_PORT}/dbbak_app",
         "details": "base.tar 独立集群恢复；4 字段、3 行、金额 601.25、中文内容、system identifier 均一致",
     })
     print(json.dumps({

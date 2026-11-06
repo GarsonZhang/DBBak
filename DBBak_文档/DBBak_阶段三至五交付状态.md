@@ -1,12 +1,12 @@
-# Vault 阶段二至五交付状态
+# DBBak 阶段二至五交付状态
 
 日期：2026-10-31 · 版本基线：0.2.0-phase2（部分阶段为开发实现，未提升为稳定版）
 
 ## 总体结论
 
 - **阶段二 PostgreSQL**：真实全量与独立集群恢复已完成。
-- **阶段二 SQL Server**：已完成真实备份与异名恢复验收（SQL Server 2025 + sqlcmd，2026-11-02），能力为 `supported`；任务创建由 `VAULT_SQLSERVER_ENABLED` 显式门控，默认关闭。
-- **阶段三**：MySQL binlog 与 PostgreSQL WAL 时间点恢复脚本已真实验证；**尚未接入 Vault 产品 API 和调度器**。SQL Server 差异/日志未验证。
+- **阶段二 SQL Server**：已完成真实备份与异名恢复验收（SQL Server 2025 + sqlcmd，2026-11-02），能力为 `supported`；任务创建由 `DBBAK_SQLSERVER_ENABLED` 显式门控，默认关闭。
+- **阶段三**：MySQL binlog 与 PostgreSQL WAL 时间点恢复脚本已真实验证；**尚未接入 DBBak 产品 API 和调度器**。SQL Server 差异/日志未验证。
 - **阶段四**：远程 Agent 的 mTLS 客户端与协议有单元/回环测试，**控制端协议接口和 Runner 执行集成未完成**；独立全量自动清理已接入；NAS 仅本地路径，**S3 未实现**。
 - **阶段五**：Windows/Linux/Docker 与构建脚本已交付并通过静态检查，**服务安装、升级、systemd、Docker 运行均未执行**。
 
@@ -18,7 +18,7 @@
 
 - `SQLServerClient`：sqlcmd 版本、真实连接检测、原生全量、CHECKSUM、备份 LSN 元数据。
 - 存储目标新增 `server_root`，要求当前矩阵与执行器 root 指向同一实际目录，防止管理端路径被误当作数据库服务路径。
-- 能力矩阵按 `VAULT_SQLSERVER_ENABLED` 返回 `unverified` 或 `supported`；开关默认关闭，避免未验收能力产生成功记录。
+- 能力矩阵按 `DBBAK_SQLSERVER_ENABLED` 返回 `unverified` 或 `supported`；开关默认关闭，避免未验收能力产生成功记录。
 - `sqlserver_test.go` 验证缺失工具、服务路径必填、受信任连接与 SQL 登录参数。
 - `scripts/phase2_sqlserver_verify.py` 使用 FILELISTONLY + WITH MOVE，不使用 REPLACE，强制隔离确认。
 
@@ -42,12 +42,12 @@
 
 - 运行：`20261031T034044Z-60128-1793418044299358100`。
 - 全量 SQL：2739 字节，SHA-256 `f90162423d106efe0762d17e10772e34234d80873110c4347ff968f88b4396f8`。
-- 全量坐标：`vault-bin.000005:639`。
-- 目标坐标：`vault-bin.000006:542`。
+- 全量坐标：`dbbak-bin.000005:639`。
+- 目标坐标：`dbbak-bin.000006:542`。
 - binlog 证据文件均记录 SHA-256，并限定在隔离目录。
 - 重放 SQL 3620 字节，SHA-256 `854c118af90b92c3f7ef02b72d17ad00d5ab40e6e3d7ccb7d1762bcfd0435921`。
 - 全量恢复为 5 行，目标标记存在，表结构和数据核对通过。
-- 使用 `--rewrite-db` 仅作用于独立 `vault_restore`，未覆盖源库。
+- 使用 `--rewrite-db` 仅作用于独立 `dbbak_restore`，未覆盖源库。
 
 ### PostgreSQL WAL 目标 LSN 恢复
 
@@ -68,7 +68,7 @@
 
 ### 尚未完成
 
-- 两个脚本是隔离恢复验证，不是 Vault 产品内的日志备份、归档、链管理和一键 PITR。
+- 两个脚本是隔离恢复验证，不是 DBBak 产品内的日志备份、归档、链管理和一键 PITR。
 - SQL Server 差异/日志、LSN 链和恢复验证未运行。
 - 压缩、加密、跨主版本、大日志量性能未验证。
 
@@ -99,19 +99,21 @@
 
 已新增但**未运行**：
 
-- Windows：WinSW 服务 XML、安装/升级/卸载/停服备份脚本；要求确认、服务专用账号、保留数据与主密钥。
+- Windows：原生 Windows 服务（`dbbak.exe` 内置 `setup` / `uninstall` / `service`，2026-11-04 起替代 WinSW 包装器）、Inno Setup 图形安装包 `DBBak-Setup-*.exe`（选择安装目录、数据目录、管理员密码）、升级/停服备份脚本；要求确认、服务专用账号、保留数据与主密钥。
 - Linux：systemd unit、环境样例、安装/升级/卸载/备份脚本；专用用户、状态目录、SQLite WAL 一致性归档。
 - Docker：非 root、只读根文件系统、持久卷、固定 Go/MySQL 版本的 Compose 与镜像文件。
 - 构建：Windows/Linux amd64/arm64 构建脚本和 SHA-256 清单模板。
 
 静态检查：Bash 语法、PowerShell AST、XML、Compose/Dockerfile/unit 关键结构通过；未执行 `docker compose config`、`systemd-analyze verify`、ShellCheck，未安装任何服务。
 
+> 2026-11-04 更新：Windows 服务改为程序内置实现，WinSW XML 与三个 WinSW 包装脚本已删除；`packaging/build-installer.ps1` 用 Inno Setup 7 编译 `packaging/dbbak.iss`，产出简体中文图形安装包 `DBBak-Setup-<版本>-windows-amd64.exe`（安装目录、数据目录、监听地址与管理员密码均可在此设置）。已逐页枚举控件验证向导页面结构；安装、ACL 授权与服务启停仍需管理员权限，本机未执行。
+
 ## 最终回归（2026-10-31）
 
 - `go test ./...` 与 `go vet -p=1 ./...` 全部通过。
 - 覆盖率：agent 76.5%、api 28.3%、backup 51.9%、metadata 27.5%、security 71.1%；两个入口无直接覆盖率。
-- Vault 与 Agent 的 Windows amd64、Linux amd64 构建通过；Linux 未运行。
-- Python 阶段二/三脚本和 Bash 发行脚本语法通过；PowerShell 5 个脚本 AST 解析、WinSW XML 解析通过。
+- DBBak 与 Agent 的 Windows amd64、Linux amd64 构建通过；Linux 未运行。
+- Python 阶段二/三脚本和 Bash 发行脚本语法通过；PowerShell 5 个脚本 AST 解析通过；`packaging/dbbak.iss` 经 Inno Setup 7.1.1 实际编译通过，向导页面逐页枚举验证。
 - Chrome 登录后概览、任务、数据库、部署和清理页面验证通过，JavaScript 异常 0。
 - 最终真实回归：MySQL `run_6814aa8dcaafe28efb61aa5f`（2296 字节，3 行/601.25）；PostgreSQL `run_02ea265fe4d7e55452e6beef`（50,284,544 字节，3 行/601.25）。
 - 项目维护的 97 个文本文件完成 CRLF 与尾随空白检查。

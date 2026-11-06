@@ -1,10 +1,10 @@
-# Vault 数据库备份管理开发文档
+# DBBak 数据库备份管理开发文档
 
 跨平台服务架构与工程实现规范
 
 版本：1.0 · 日期：2026-10-30 · 状态：设计评审稿
 
-配套文件：[产品需求](Vault_产品需求文档.md) · [原型设计说明](Vault_原型设计说明.md) · [HTML 交互原型](../web/index.html)
+配套文件：[产品需求](DBBak_产品需求文档.md) · [原型设计说明](DBBak_原型设计说明.md) · [HTML 交互原型](../web/index.html)
 
 ## 1 系统架构与实现边界
 
@@ -63,7 +63,7 @@
 | sources | id、engine、instance_uid、scope、host、secret_ref | 实例身份与连接地址分离；连接可迁移。 |
 | executors | id、platform、capabilities、last_seen、certificate_id | 证书指纹唯一；按状态和心跳查询。 |
 | storage_targets | id、kind、executor_id、root、secret_ref | 根目录与执行器绑定；凭据引用不回显。 |
-| jobs 与 schedules | job_id、source_id、target_id、adapter、config_version、timezone、next_run_at | 到期索引 enabled 与 next_run_at。 |
+| jobs 与 schedules | job_id、source_id、target_id、subdir、adapter、config_version、timezone、next_run_at | 到期索引 enabled 与 next_run_at；`subdir` 是任务在根目录下的相对落点，用于区分共用同一根目录的多个实例。 |
 | runs | id、job_id、scheduled_at、state、attempt、lease_owner、lease_until、fence | 计划触发唯一键为任务、计划版本、UTC 触发时间。 |
 | artifacts 与 edges | artifact_id、run_id、group_id、type、size、hash、state、start_pos、end_pos、parent_id | 对象键唯一；依赖边唯一；按组及时间范围查询。 |
 | retention 与 cleanup | group_id、days、min_full、auto_enabled、preview_hash、revision、state | 策略与清单版本冲突则拒绝旧预览。 |
@@ -204,13 +204,13 @@ Docker 镜像属于 Linux 容器版本。Windows 原生包无需 Docker；在 Wi
 
 ```yaml
 services:
-  vault:
+  dbbak:
     build: ./deploy/docker
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
-      - ./state:/var/lib/vault
+      - ./state:/var/lib/dbbak
       - /srv/db-backups:/backups
     stop_grace_period: 120s
 ```

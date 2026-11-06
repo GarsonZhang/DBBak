@@ -51,19 +51,28 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 func (s *Store) migrate(ctx context.Context) error {
+	// 迁移 6 需要重建带外键的表，外键开关只能在事务外切换；
+	// 因此整个迁移流程改为：事务外读版本 → 关外键 → 单事务执行全部迁移 → 恢复外键。
+	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	var version int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= currentMigrationVersion {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return fmt.Errorf("迁移前关闭外键: %w", err)
+	}
+	defer func() { _, _ = s.db.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
-		return err
-	}
-	var version int
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version)
-	if err != nil {
-		return err
-	}
 	if version < 1 {
 		if _, err = tx.ExecContext(ctx, schemaV1); err != nil {
 			return fmt.Errorf("执行迁移 1: %w", err)
@@ -97,11 +106,128 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if version > 4 {
+	if version < 5 {
+		// 子目录属于任务级路径配置；历史任务保持空值，输出位置不变。
+		if _, err = tx.ExecContext(ctx, "ALTER TABLE jobs ADD COLUMN subdir TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("执行迁移 5: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO schema_migrations(version,applied_at) VALUES(5,?)", formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version < 6 {
+		// 备份位置模型：任务可直连数据库服务器本地目录（location_kind='database_server'），
+		// 此时不选择存储位置，jobs.target_id 与 artifacts.target_id 允许为空。
+		// SQLite 无法直接去掉 NOT NULL，需按标准流程重建两张表。
+		rebuild := []string{
+			`CREATE TABLE jobs_new (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, source_id TEXT NOT NULL REFERENCES sources(id),
+ target_id TEXT REFERENCES storage_targets(id), location_kind TEXT NOT NULL DEFAULT 'storage',
+ server_dir TEXT NOT NULL DEFAULT '', timezone TEXT NOT NULL,
+ schedule_type TEXT NOT NULL, time_of_day TEXT NOT NULL, weekday INTEGER NOT NULL,
+ interval_minutes INTEGER NOT NULL, enabled INTEGER NOT NULL,
+ backup_type TEXT NOT NULL DEFAULT 'full', subdir TEXT NOT NULL DEFAULT '',
+ retention_days INTEGER NOT NULL, min_full INTEGER NOT NULL, auto_cleanup INTEGER NOT NULL,
+ next_run_at TEXT, revision INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+)`,
+			`INSERT INTO jobs_new SELECT id,name,source_id,target_id,'storage','',timezone,
+ schedule_type,time_of_day,weekday,interval_minutes,enabled,backup_type,subdir,
+ retention_days,min_full,auto_cleanup,next_run_at,revision,created_at,updated_at FROM jobs`,
+			`DROP TABLE jobs`,
+			`ALTER TABLE jobs_new RENAME TO jobs`,
+			`CREATE INDEX jobs_due ON jobs(enabled,next_run_at)`,
+			`CREATE TABLE artifacts_new (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE REFERENCES runs(id), job_id TEXT NOT NULL REFERENCES jobs(id),
+ source_id TEXT NOT NULL REFERENCES sources(id), target_id TEXT REFERENCES storage_targets(id),
+ chain_id TEXT NOT NULL, parent_id TEXT, type TEXT NOT NULL, method TEXT NOT NULL,
+ relative_path TEXT NOT NULL UNIQUE, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+ state TEXT NOT NULL, locked INTEGER NOT NULL, tool_version TEXT NOT NULL,
+ engine_metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, verified_at TEXT
+)`,
+			`INSERT INTO artifacts_new SELECT id,run_id,job_id,source_id,target_id,chain_id,parent_id,type,method,
+ relative_path,size,sha256,state,locked,tool_version,engine_metadata,created_at,verified_at FROM artifacts`,
+			`DROP TABLE artifacts`,
+			`ALTER TABLE artifacts_new RENAME TO artifacts`,
+			`CREATE INDEX artifacts_job_created ON artifacts(job_id,created_at DESC)`,
+		}
+		for _, statement := range rebuild {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("执行迁移 6: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(6,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version < 7 {
+		// 存储位置类型扩展：FTP 远程存储需要主机、端口、账号与加密凭据；
+		// UNC 共享目录复用 root，无需新列。
+		alters := []string{
+			`ALTER TABLE storage_targets ADD COLUMN host TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE storage_targets ADD COLUMN port INTEGER NOT NULL DEFAULT 21`,
+			`ALTER TABLE storage_targets ADD COLUMN username TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE storage_targets ADD COLUMN secret_ref TEXT REFERENCES secrets(id)`,
+			`ALTER TABLE storage_targets ADD COLUMN passive INTEGER NOT NULL DEFAULT 1`,
+		}
+		for _, statement := range alters {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("执行迁移 7: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(7,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version < 8 {
+		// 对象存储（S3 兼容，含阿里云 OSS）：复用 host/port/username/secret_ref 承载
+		// 端点、AccessKey ID 与加密的 AccessKey Secret，新增 bucket/region/use_ssl/path_style。
+		// root 列存放对象键前缀（如 /backups 或空表示桶根），与本地目录列复用但语义由 kind 决定。
+		alters := []string{
+			`ALTER TABLE storage_targets ADD COLUMN bucket TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE storage_targets ADD COLUMN region TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE storage_targets ADD COLUMN use_ssl INTEGER NOT NULL DEFAULT 1`,
+			`ALTER TABLE storage_targets ADD COLUMN path_style INTEGER NOT NULL DEFAULT 0`,
+		}
+		for _, statement := range alters {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("执行迁移 8: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(8,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version < 9 {
+		// 备份路线：同一引擎可能同时存在逻辑与物理路线（如 MySQL 的 mysqldump 与 XtraBackup）。
+		// 任务侧记录选择，对象侧记录来源，避免两条路线的产物被误当作彼此的恢复基线。
+		// 历史对象没有路线信息，按实际使用的工具回填，不能一律标成逻辑备份。
+		alters := []string{
+			`ALTER TABLE jobs ADD COLUMN backup_method TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE artifacts ADD COLUMN backup_method TEXT NOT NULL DEFAULT ''`,
+			`UPDATE artifacts SET backup_method = CASE method
+ WHEN 'pg_basebackup' THEN 'physical'
+ WHEN 'sqlserver_native' THEN 'native'
+ WHEN 'xtrabackup' THEN 'physical'
+ WHEN 'mysqlbinlog' THEN 'physical'
+ ELSE 'logical' END`,
+		}
+		for _, statement := range alters {
+			if _, err = tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("执行迁移 9: %w", err)
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(9,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
+	if version > currentMigrationVersion {
 		return fmt.Errorf("元数据库版本 %d 高于当前程序支持版本", version)
 	}
 	return tx.Commit()
 }
+
+// currentMigrationVersion 是程序支持的最新元数据版本；新增迁移时同步递增。
+const currentMigrationVersion = 9
 
 const schemaV1 = `
 CREATE TABLE users (

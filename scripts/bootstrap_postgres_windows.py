@@ -14,7 +14,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".test-runtime"
-HOME = Path(os.environ.get("VAULT_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
+HOME = Path(os.environ.get("DBBAK_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
 SOURCE = RUNTIME / "pg-source-data"
 PORT = 35432
 
@@ -56,18 +56,18 @@ def seed() -> None:
     env["PGPASSWORD"] = password(RUNTIME / "pg-superuser-password")
     env["PGCLIENTENCODING"] = "UTF8"
     role_password = password(RUNTIME / "pg-password")
-    role_sql = "DROP ROLE IF EXISTS vault_pg; CREATE ROLE vault_pg LOGIN SUPERUSER REPLICATION PASSWORD '" + role_password + "';"
+    role_sql = "DROP ROLE IF EXISTS dbbak_pg; CREATE ROLE dbbak_pg LOGIN SUPERUSER REPLICATION PASSWORD '" + role_password + "';"
     run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command=" + role_sql], env=env)
-    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command=DROP DATABASE IF EXISTS vault_app"], env=env)
-    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command=CREATE DATABASE vault_app ENCODING 'UTF8'"], env=env)
+    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command=DROP DATABASE IF EXISTS dbbak_app"], env=env)
+    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=postgres", "--set=ON_ERROR_STOP=1", "--command=CREATE DATABASE dbbak_app ENCODING 'UTF8'"], env=env)
     sample = (
         "DROP TABLE IF EXISTS sample_records;"
         "CREATE TABLE sample_records (id BIGINT PRIMARY KEY, name VARCHAR(100) NOT NULL, amount NUMERIC(12,2) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());"
         "INSERT INTO sample_records(id,name,amount) VALUES (1,'隔离验证-A',100.50),(2,'隔离验证-B',200.75),(3,'隔离验证-C',300.00);"
     )
     # Windows 命令行可能使用系统代码页，含中文 SQL 必须通过 UTF-8 标准输入发送。
-    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=vault_app", "--set=ON_ERROR_STOP=1"], env=env, input_bytes=sample.encode("utf-8"))
-    print("已创建 vault_pg 角色与 vault_app.sample_records 三行样本。")
+    run([HOME / "bin/psql.exe", "--host=127.0.0.1", f"--port={PORT}", "--username=postgres", "--dbname=dbbak_app", "--set=ON_ERROR_STOP=1"], env=env, input_bytes=sample.encode("utf-8"))
+    print("已创建 dbbak_pg 角色与 dbbak_app.sample_records 三行样本。")
 
 
 def stop_source() -> None:

@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 // PostgreSQLClient 使用 psql 与 pg_basebackup 实现整实例物理全量。
@@ -22,6 +22,9 @@ type PostgreSQLClient struct {
 
 // Engine 返回注册引擎名。
 func (c PostgreSQLClient) Engine() string { return "postgresql" }
+
+// Method 声明这是 PostgreSQL 的物理备份路线（pg_basebackup 整实例）。
+func (c PostgreSQLClient) Method() string { return "physical" }
 
 // Version 返回 pg_basebackup 的真实版本。
 func (c PostgreSQLClient) Version(ctx context.Context) (string, error) {
@@ -117,7 +120,9 @@ func (c PostgreSQLClient) run(ctx context.Context, path string, args []string, p
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		code, message = "BACKUP_TIMEOUT", "PostgreSQL 工具执行超时"
 	case errors.Is(err, exec.ErrNotFound) || strings.Contains(strings.ToLower(err.Error()), "executable file not found"):
-		code, message = "TOOL_MISSING", "找不到 PostgreSQL 工具，请检查 VAULT_PSQL 与 VAULT_PG_BASEBACKUP"
+		code = "TOOL_MISSING"
+		// 指名缺失的工具：发行包只自带 MySQL 客户端，缺 PostgreSQL 工具是常见初始状态。
+		message = "找不到 PostgreSQL 工具 " + filepath.Base(path) + "，请确认该工具已安装或通过 DBBAK_PSQL / DBBAK_PG_BASEBACKUP 指定"
 	case strings.Contains(lower, "password authentication failed"):
 		code = "AUTH_FAILED"
 	case strings.Contains(lower, "could not connect") || strings.Contains(lower, "connection refused") || strings.Contains(lower, "timeout expired"):

@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"vault"
+	"dbbak"
 )
 
 // 前端目录位于模块根的 web/；此测试锁定嵌入声明与子目录名一致。
 // 若有人把 web 移出模块目录或改错 fs.Sub 路径，这里会直接失败。
 func TestEmbeddedUIAssets(t *testing.T) {
-	static, err := fs.Sub(vault.StaticFS, "web")
+	static, err := fs.Sub(dbbak.StaticFS, "web")
 	if err != nil {
 		t.Fatalf("前端子目录不存在，检查 embed.go 与目录结构: %v", err)
 	}

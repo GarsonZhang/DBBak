@@ -15,11 +15,11 @@ import subprocess
 import sys
 import time
 
-SQLCMD = os.environ.get("VAULT_TEST_SQLCMD", "sqlcmd")
-SERVER = os.environ.get("VAULT_TEST_SQLSERVER_SERVER", "")
-USER = os.environ.get("VAULT_TEST_SQLSERVER_USER", "")
-SOURCE_DB = "vault_test_source"
-RESTORE_PREFIX = "vault_test_restore_"
+SQLCMD = os.environ.get("DBBAK_TEST_SQLCMD", "sqlcmd")
+SERVER = os.environ.get("DBBAK_TEST_SQLSERVER_SERVER", "")
+USER = os.environ.get("DBBAK_TEST_SQLSERVER_USER", "")
+SOURCE_DB = "dbbak_test_source"
+RESTORE_PREFIX = "dbbak_test_restore_"
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -28,15 +28,15 @@ def fail(message: str) -> None:
 
 
 def settings() -> tuple[Path, Path, Path, Path]:
-    if os.environ.get("VAULT_TEST_SQLSERVER_CONFIRM_ISOLATED") != "YES":
-        fail("拒绝运行：必须设置 VAULT_TEST_SQLSERVER_CONFIRM_ISOLATED=YES，确认实例和目录均为隔离测试用途")
+    if os.environ.get("DBBAK_TEST_SQLSERVER_CONFIRM_ISOLATED") != "YES":
+        fail("拒绝运行：必须设置 DBBAK_TEST_SQLSERVER_CONFIRM_ISOLATED=YES，确认实例和目录均为隔离测试用途")
     if not SERVER:
-        fail("请设置 VAULT_TEST_SQLSERVER_SERVER，例如 localhost\\MSSQLSERVER")
+        fail("请设置 DBBAK_TEST_SQLSERVER_SERVER，例如 localhost\\MSSQLSERVER")
     if not IDENTIFIER.fullmatch(SOURCE_DB) or not IDENTIFIER.fullmatch(RESTORE_PREFIX):
         fail("测试数据库标识符不安全")
-    root_text = os.environ.get("VAULT_TEST_SQLSERVER_SANDBOX_ROOT", "")
+    root_text = os.environ.get("DBBAK_TEST_SQLSERVER_SANDBOX_ROOT", "")
     if not root_text:
-        fail("请设置 VAULT_TEST_SQLSERVER_SANDBOX_ROOT；SQL Server 服务账号必须可读写该目录")
+        fail("请设置 DBBAK_TEST_SQLSERVER_SANDBOX_ROOT；SQL Server 服务账号必须可读写该目录")
     root = Path(root_text).resolve()
     if not root.is_absolute() or len(root.parts) < 2:
         fail("SANDBOX_ROOT 必须是独立的绝对目录，不能是磁盘根目录")
@@ -88,7 +88,7 @@ def main() -> None:
     restore_db = RESTORE_PREFIX + re.sub(r"[^A-Za-z0-9_]", "", run_id)
     if not IDENTIFIER.fullmatch(restore_db):
         fail("恢复数据库标识符不安全")
-    backup_file = backup_dir / ("vault-full-" + run_id + ".bak")
+    backup_file = backup_dir / ("dbbak-full-" + run_id + ".bak")
     if backup_file.exists():
         fail(f"拒绝覆盖已有备份: {backup_file}")
 

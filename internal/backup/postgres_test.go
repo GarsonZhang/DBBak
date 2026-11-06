@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 func TestPostgreSQLToolAndRegistryFailures(t *testing.T) {
@@ -22,10 +22,10 @@ func TestPostgreSQLToolAndRegistryFailures(t *testing.T) {
 
 func TestPostgreSQLArgumentsUseMaintenanceDatabase(t *testing.T) {
 	client := PostgreSQLClient{}
-	source := metadata.Source{Engine: "postgresql", Host: "127.0.0.1", Port: 35432, Database: "postgres", Username: "vault_pg"}
+	source := metadata.Source{Engine: "postgresql", Host: "127.0.0.1", Port: 35432, Database: "postgres", Username: "dbbak_pg"}
 	args := client.sqlArgs(source, "SELECT version()")
 	joined := strings.Join(args, " ")
-	for _, expected := range []string{"--host=127.0.0.1", "--port=35432", "--username=vault_pg", "--dbname=postgres", "ON_ERROR_STOP=1"} {
+	for _, expected := range []string{"--host=127.0.0.1", "--port=35432", "--username=dbbak_pg", "--dbname=postgres", "ON_ERROR_STOP=1"} {
 		if !strings.Contains(joined, expected) {
 			t.Errorf("psql 参数缺少 %s: %s", expected, joined)
 		}

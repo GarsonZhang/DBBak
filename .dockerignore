@@ -2,7 +2,7 @@
 .gitignore
 .tools
 .test-runtime
-.vault
+.dbbak
 .workbuddy
 dist
 coverage.out

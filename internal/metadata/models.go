@@ -28,7 +28,8 @@ type Source struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// StorageTarget 描述执行器本地授权目录；首版不支持 NAS/S3。
+// StorageTarget 描述备份落点登记：local/unc 为文件系统目录，ftp 为远程文件服务器，
+// oss 为 S3 兼容对象存储（阿里云 OSS、MinIO、AWS S3 共用同一实现）。
 type StorageTarget struct {
 	ID         string    `json:"id"`
 	Name       string    `json:"name"`
@@ -37,14 +38,39 @@ type StorageTarget struct {
 	Revision   int64     `json:"revision"`
 	ServerRoot string    `json:"server_root,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
+	// Kind='ftp' 时的远程连接配置；local/unc 不使用。SecretRef 指向加密的 FTP 密码。
+	Host     string `json:"host,omitempty"`
+	Port     int    `json:"port,omitempty"`
+	Username string `json:"username,omitempty"`
+	SecretRef string `json:"-"`
+	Passive  bool   `json:"passive"`
+	// Kind='oss' 时的对象存储配置：Bucket 为存储空间名，Region 为该服务的签名地域，
+	// Endpoint 为服务地址（如 oss-cn-hangzhou.aliyuncs.com），UseSSL 决定 https 与否，
+	// PathStyle 为 true 时使用「端点/bucket/key」形式（MinIO、部分私有化 OSS 需要）。
+	// Username 复用为 AccessKey ID，SecretRef 指向加密的 AccessKey Secret。
+	Bucket    string `json:"bucket,omitempty"`
+	Region    string `json:"region,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty"`
+	UseSSL    bool   `json:"use_ssl"`
+	PathStyle bool   `json:"path_style"`
 }
 
 // Job 同时保存调度与保留策略；Enabled 与运行状态无关。
 type Job struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	SourceID        string     `json:"source_id"`
-	TargetID        string     `json:"target_id"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	SourceID string `json:"source_id"`
+	// TargetID 是存储位置登记 ID；LocationKind='database_server' 时为空，
+	// 备份由数据库服务直接写到任务配置的服务器目录，不经过执行器磁盘。
+	TargetID string `json:"target_id"`
+	// LocationKind 区分备份落点：'storage'（执行器可达的存储位置）或
+	// 'database_server'（数据库服务器本地目录，仅 SQL Server 原生备份支持）。
+	LocationKind string `json:"location_kind"`
+	// ServerDir 是 database_server 模式下数据库服务器上的输出目录，如 D:\bak。
+	ServerDir      string     `json:"server_dir"`
+	// Subdir 是任务在存储根目录下的相对子目录，为不同数据库实例区分子目录；
+	// 空值表示直接写入根目录（历史任务行为）。每次运行冻结其值，已产出的文件位置不受后续修改影响。
+	Subdir          string     `json:"subdir"`
 	Timezone        string     `json:"timezone"`
 	ScheduleType    string     `json:"schedule_type"`
 	TimeOfDay       string     `json:"time_of_day"`
@@ -52,6 +78,10 @@ type Job struct {
 	IntervalMinutes int        `json:"interval_minutes"`
 	Enabled         bool       `json:"enabled"`
 	BackupType      string     `json:"backup_type"`
+	// BackupMethod 是任务选择的备份路线：空表示沿用引擎默认路线（MySQL 为逻辑全量），
+	// logical 为 mysqldump，physical 为 XtraBackup 物理备份。
+	// 同一引擎的两条路线恢复语义完全不同，必须在任务上固定，不能按运行时环境临时切换。
+	BackupMethod    string     `json:"backup_method"`
 	RetentionDays   int        `json:"retention_days"`
 	MinFull         int        `json:"min_full"`
 	AutoCleanup     bool       `json:"auto_cleanup"`
@@ -101,6 +131,9 @@ type Artifact struct {
 	ParentID       *string         `json:"parent_id"`
 	Type           string          `json:"type"`
 	Method         string          `json:"method"`
+	// BackupMethod 记录产出该对象的备份路线，用于把恢复链限定在同一路线内：
+	// 逻辑备份与物理备份的产物不能互为基线，混链会生成无法恢复的依赖关系。
+	BackupMethod   string          `json:"backup_method"`
 	RelativePath   string          `json:"relative_path"`
 	Size           int64           `json:"size"`
 	SHA256         string          `json:"sha256"`

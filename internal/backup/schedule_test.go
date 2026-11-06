@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 func TestNextRunDailyTimezone(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 // Scheduler 在后台计算到期任务，与浏览器连接无关。
@@ -132,7 +132,10 @@ func (s *Scheduler) runAutoCleanup(ctx context.Context, now time.Time) {
 		}
 		location, locationErr := time.LoadLocation(job.Timezone)
 		if locationErr != nil {
-			location = time.UTC
+			// 时区坏掉时宁可不清理：按 UTC 猜测会在错误的本地日期删文件。
+			log.Printf("自动清理跳过任务 %s：时区 %q 无法加载: %v", job.ID, job.Timezone, locationErr)
+			_ = s.store.Audit(ctx, "scheduler", "cleanup.auto", job.ID, "timezone_invalid", locationErr.Error())
+			continue
 		}
 		localNow := now.In(location)
 		day := localNow.Format("2006-01-02")

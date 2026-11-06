@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MySQL 8.4.13 隔离实例的真实全量与 binlog 时间点恢复验证。
 
-只连接 127.0.0.1:33306，只重建 vault_restore，并在 vault_source.sample_records
+只连接 127.0.0.1:33306，只重建 dbbak_restore，并在 dbbak_source.sample_records
 新增一条带本次运行标识的记录。每次运行使用独立证据目录，不清理 binlog、
 不删除历史证据。运行前必须由主流程将实例改为 log-bin 模式。
 """
@@ -23,14 +23,14 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".test-runtime"
 DATA = RUNTIME / "mysql-data"
 EVIDENCE_ROOT = RUNTIME / "mysql-binlog-verify"
-HOME = Path(os.environ.get("VAULT_TEST_MYSQL_HOME", ROOT / ".tools/mysql-8.4.13-winx64"))
+HOME = Path(os.environ.get("DBBAK_TEST_MYSQL_HOME", ROOT / ".tools/mysql-8.4.13-winx64"))
 MYSQL = HOME / "bin/mysql.exe"
 MYSQLDUMP = HOME / "bin/mysqldump.exe"
 MYSQLBINLOG = HOME / "bin/mysqlbinlog.exe"
 BASE = ["--protocol=TCP", "--host=127.0.0.1", "--port=33306"]
-USER = "vault_test"
-SOURCE_DB = "vault_source"
-RESTORE_DB = "vault_restore"
+USER = "dbbak_test"
+SOURCE_DB = "dbbak_source"
+RESTORE_DB = "dbbak_restore"
 TABLE = "sample_records"
 VERSION = "8.4.13"
 BINLOG_NAME = re.compile(r"^(?P<prefix>.+\.)(?P<number>\d+)$")
@@ -192,11 +192,11 @@ def preflight() -> tuple[Path, dict]:
         raise AssertionError(f"binlog 目录不在批准的隔离目录内: {binlog_dir}")
     table_count = mysql_sql(
         "SELECT COUNT(*) FROM information_schema.tables "
-        "WHERE table_schema='vault_source' AND table_name='sample_records' "
+        "WHERE table_schema='dbbak_source' AND table_name='sample_records' "
         "AND table_type='BASE TABLE'"
     )
     if table_count != "1":
-        raise AssertionError("缺少源样本基表 vault_source.sample_records")
+        raise AssertionError("缺少源样本基表 dbbak_source.sample_records")
     # 恢复会话必须能关闭 sql_log_bin，否则全量导入会污染待重放区间。
     mysql_sql("SET SESSION sql_log_bin=0;SET SESSION sql_log_bin=1")
     return binlog_dir, {
@@ -328,10 +328,10 @@ def main() -> None:
 
         # 只重建固定隔离恢复库；这些管理语句位于全量坐标之前。
         mysql_sql(
-            "DROP DATABASE IF EXISTS vault_restore;"
-            "CREATE DATABASE vault_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
+            "DROP DATABASE IF EXISTS dbbak_restore;"
+            "CREATE DATABASE dbbak_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"
         )
-        dump_file = run_dir / "vault_source_full.sql"
+        dump_file = run_dir / "dbbak_source_full.sql"
         dump_args = [
             MYSQLDUMP,
             "--no-defaults",
@@ -383,7 +383,7 @@ def main() -> None:
             if mysql_sql(f"SELECT COUNT(*) FROM {database}.{TABLE} WHERE id={marker_id}") != "0":
                 raise AssertionError(f"样本 id 在 {database} 中已存在: {marker_id}")
         output = mysql_sql(
-            "USE vault_source;"
+            "USE dbbak_source;"
             f"INSERT INTO sample_records(id,name,amount) VALUES({marker_id},'{marker}',904.13);"
             "SHOW BINARY LOG STATUS;"
             "FLUSH LOGS"

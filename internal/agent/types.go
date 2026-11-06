@@ -1,4 +1,4 @@
-// Package agent 实现 Vault 远程 Agent 的安全通信与有序上报协议。
+// Package agent 实现 DBBak 远程 Agent 的安全通信与有序上报协议。
 // 本包不负责具体数据库备份，备份能力通过 Executor 接口注入。
 package agent
 

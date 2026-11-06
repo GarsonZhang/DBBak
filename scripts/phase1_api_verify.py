@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Vault 阶段一真实 API、MySQL 备份与隔离恢复验证。
+"""DBBak 阶段一真实 API、MySQL 备份与隔离恢复验证。
 
 仅使用隔离测试账号和 .test-runtime 下的凭据文件，不打印密码或会话令牌。
-运行前需启动隔离 MySQL 与 Vault；不支持用于生产数据库。
+运行前需启动隔离 MySQL 与 DBBak；不支持用于生产数据库。
 """
 from __future__ import annotations
 
@@ -20,13 +20,13 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".test-runtime"
-BASE_URL = os.environ.get("VAULT_TEST_URL", "http://127.0.0.1:38080")
-MYSQL = Path(os.environ.get("VAULT_TEST_MYSQL", ROOT / ".tools/mysql-8.4.13-winx64/bin/mysql.exe"))
-DB_HOST = os.environ.get("VAULT_TEST_DB_HOST", "127.0.0.1")
-DB_PORT = int(os.environ.get("VAULT_TEST_DB_PORT", "33306"))
-DB_USER = os.environ.get("VAULT_TEST_DB_USER", "vault_test")
-SOURCE_DB = "vault_source"
-RESTORE_DB = "vault_restore"
+BASE_URL = os.environ.get("DBBAK_TEST_URL", "http://127.0.0.1:38080")
+MYSQL = Path(os.environ.get("DBBAK_TEST_MYSQL", ROOT / ".tools/mysql-8.4.13-winx64/bin/mysql.exe"))
+DB_HOST = os.environ.get("DBBAK_TEST_DB_HOST", "127.0.0.1")
+DB_PORT = int(os.environ.get("DBBAK_TEST_DB_PORT", "33306"))
+DB_USER = os.environ.get("DBBAK_TEST_DB_USER", "dbbak_test")
+SOURCE_DB = "dbbak_source"
+RESTORE_DB = "dbbak_restore"
 
 
 def require_file(path: Path) -> str:
@@ -45,7 +45,7 @@ class API:
         body = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(BASE_URL + path, data=body, method=method)
         request.add_header("Accept", "application/json")
-        request.add_header("X-Vault-Request", "1")
+        request.add_header("X-DBBak-Request", "1")
         if body is not None:
             request.add_header("Content-Type", "application/json; charset=utf-8")
         for key, value in (headers or {}).items():
@@ -111,24 +111,24 @@ def main() -> None:
     if capabilities["local_executor"]["status"] != "supported":
         raise AssertionError(f"mysqldump 不可用: {capabilities['local_executor']['message']}")
 
-    source = find_or_create(api, "sources", "Vault 隔离 MySQL 8.4", {
-        "name": "Vault 隔离 MySQL 8.4", "engine": "mysql", "host": DB_HOST, "port": DB_PORT,
+    source = find_or_create(api, "sources", "DBBak 隔离 MySQL 8.4", {
+        "name": "DBBak 隔离 MySQL 8.4", "engine": "mysql", "host": DB_HOST, "port": DB_PORT,
         "database": SOURCE_DB, "username": DB_USER, "password": require_file(RUNTIME / "mysql-password"),
     })
     _, probe = api.call("POST", f"/api/v1/sources/{source['id']}/probe", {})
     if not probe["server_version"].startswith("8.4.13"):
         raise AssertionError(f"测试数据库版本不符合固定基线: {probe['server_version']}")
 
-    wrong_source = find_or_create(api, "sources", "Vault 错误密码负向验证", {
-        "name": "Vault 错误密码负向验证", "engine": "mysql", "host": DB_HOST, "port": DB_PORT,
+    wrong_source = find_or_create(api, "sources", "DBBak 错误密码负向验证", {
+        "name": "DBBak 错误密码负向验证", "engine": "mysql", "host": DB_HOST, "port": DB_PORT,
         "database": SOURCE_DB, "username": DB_USER, "password": "intentionally-wrong-test-password",
     })
     _, error = api.call("POST", f"/api/v1/sources/{wrong_source['id']}/probe", {}, expected=(422,))
     if error["code"] != "AUTH_FAILED":
         raise AssertionError(f"错误密码未分类为 AUTH_FAILED: {error}")
 
-    target = find_or_create(api, "storage-targets", "Vault 隔离备份目录", {
-        "name": "Vault 隔离备份目录", "kind": "local", "root": str(RUNTIME / "backup-root"),
+    target = find_or_create(api, "storage-targets", "DBBak 隔离备份目录", {
+        "name": "DBBak 隔离备份目录", "kind": "local", "root": str(RUNTIME / "backup-root"),
     })
     api.call("POST", f"/api/v1/storage-targets/{target['id']}/check", {})
     invalid_root = RUNTIME / "not-a-directory"
@@ -139,8 +139,8 @@ def main() -> None:
     if error["code"] != "STORAGE_NOT_WRITABLE":
         raise AssertionError(f"非法目录未明确失败: {error}")
 
-    job = find_or_create(api, "jobs", "Vault 隔离 MySQL 每分钟全量", {
-        "name": "Vault 隔离 MySQL 每分钟全量", "source_id": source["id"], "target_id": target["id"],
+    job = find_or_create(api, "jobs", "DBBak 隔离 MySQL 每分钟全量", {
+        "name": "DBBak 隔离 MySQL 每分钟全量", "source_id": source["id"], "target_id": target["id"],
         "timezone": "Asia/Shanghai", "schedule_type": "interval", "time_of_day": "02:00",
         "weekday": 0, "interval_minutes": 1, "enabled": True,
         "retention_days": 30, "min_full": 1, "auto_cleanup": False,

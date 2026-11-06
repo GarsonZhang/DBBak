@@ -1,4 +1,4 @@
-// vault-agent 提供远程 Agent 的一次性注册入口。
+// dbbak-agent 提供远程 Agent 的一次性注册入口。
 // 任务执行入口需要在后续接入现有本地 Runner 的已验证适配器后开放。
 package main
 
@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"vault/internal/agent"
+	"dbbak/internal/agent"
 )
 
 func main() {
@@ -22,21 +22,21 @@ func main() {
 
 func run(arguments []string) error {
 	if len(arguments) != 1 || arguments[0] != "enroll" {
-		return errors.New("用法: vault-agent enroll；任务执行适配器尚未接入，当前仅开放独立注册流程")
+		return errors.New("用法: dbbak-agent enroll；任务执行适配器尚未接入，当前仅开放独立注册流程")
 	}
-	token := os.Getenv("VAULT_AGENT_ENROLLMENT_TOKEN")
-	defer os.Unsetenv("VAULT_AGENT_ENROLLMENT_TOKEN")
+	token := os.Getenv("DBBAK_AGENT_ENROLLMENT_TOKEN")
+	defer os.Unsetenv("DBBAK_AGENT_ENROLLMENT_TOKEN")
 	if token == "" {
-		return errors.New("请通过 VAULT_AGENT_ENROLLMENT_TOKEN 提供一次性令牌；不要放入命令行参数")
+		return errors.New("请通过 DBBAK_AGENT_ENROLLMENT_TOKEN 提供一次性令牌；不要放入命令行参数")
 	}
-	stateDir := os.Getenv("VAULT_AGENT_STATE_DIR")
+	stateDir := os.Getenv("DBBAK_AGENT_STATE_DIR")
 	if stateDir == "" {
-		return errors.New("请通过 VAULT_AGENT_STATE_DIR 指定身份目录")
+		return errors.New("请通过 DBBAK_AGENT_STATE_DIR 指定身份目录")
 	}
 	enroller, err := agent.NewEnroller(agent.EnrollmentConfig{
-		ServerURL: os.Getenv("VAULT_AGENT_SERVER"),
-		CAFile:    os.Getenv("VAULT_AGENT_CA"),
-		AgentName: os.Getenv("VAULT_AGENT_NAME"),
+		ServerURL: os.Getenv("DBBAK_AGENT_SERVER"),
+		CAFile:    os.Getenv("DBBAK_AGENT_CA"),
+		AgentName: os.Getenv("DBBAK_AGENT_NAME"),
 	})
 	if err != nil {
 		return err

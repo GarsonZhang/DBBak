@@ -1,9 +1,9 @@
-# Vault release: 0.2.0-phase2
+# DBBak release: 0.2.0-phase2
 # Go toolchain: go1.27.3
 # Build flags: CGO_ENABLED=0 -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w -buildid='
 # Source commit: <40-character-commit-id>
 # 将尖括号占位符替换为实际小写 SHA-256；从发布根目录运行 sha256sum -c SHA256SUMS。
-<64-character-lowercase-sha256>  linux_amd64/vault
-<64-character-lowercase-sha256>  linux_arm64/vault
-<64-character-lowercase-sha256>  windows_amd64/vault.exe
-<64-character-lowercase-sha256>  windows_arm64/vault.exe
+<64-character-lowercase-sha256>  linux_amd64/dbbak
+<64-character-lowercase-sha256>  linux_arm64/dbbak
+<64-character-lowercase-sha256>  windows_amd64/dbbak.exe
+<64-character-lowercase-sha256>  windows_arm64/dbbak.exe

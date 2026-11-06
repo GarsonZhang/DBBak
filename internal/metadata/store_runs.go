@@ -106,6 +106,22 @@ func (s *Store) ReconcileRuns(ctx context.Context) error {
 	return tx.Commit()
 }
 
+// DeleteRun 删除单条运行记录及其日志；仅用于删除动作未完成时回收临时运行。
+func (s *Store) DeleteRun(ctx context.Context, runID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM run_logs WHERE run_id=?`, runID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM runs WHERE id=?`, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // AddRunLog 添加已脱敏日志。
 func (s *Store) AddRunLog(ctx context.Context, runID, level, message string) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO run_logs(run_id,ts,level,message) VALUES(?,?,?,?)`, runID, formatTime(time.Now()), level, message)

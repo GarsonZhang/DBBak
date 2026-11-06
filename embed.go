@@ -1,5 +1,5 @@
-// Package vault 提供由后端统一承载的现有中文 Web 资源。
-package vault
+// Package dbbak 提供由后端统一承载的现有中文 Web 资源。
+package dbbak
 
 import "embed"
 

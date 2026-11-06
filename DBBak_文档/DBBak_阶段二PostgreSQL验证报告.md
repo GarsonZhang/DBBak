@@ -1,4 +1,4 @@
-# Vault 阶段二 PostgreSQL 验证报告
+# DBBak 阶段二 PostgreSQL 验证报告
 
 日期：2026-10-30 · 版本：0.2.0-phase2 · 范围：PostgreSQL Windows + pg_basebackup 整实例物理全量
 
@@ -21,11 +21,11 @@
 
 ## 真实环境
 
-- 管理服务：Windows x86-64，Go 1.27.3，Vault 0.2.0-phase2。
+- 管理服务：Windows x86-64，Go 1.27.3，DBBak 0.2.0-phase2。
 - 源集群：PostgreSQL 18.6，127.0.0.1:35432，独立 `.test-runtime/pg-source-data`。
 - 工具：psql、pg_basebackup 均 18.6。
-- 备份账号：隔离 vault_pg，具有 SUPERUSER 与 REPLICATION；只用于本测试。
-- 样本：vault_app.sample_records，4 个字段、3 行，中文 A/B/C，amount 合计 601.25。
+- 备份账号：隔离 dbbak_pg，具有 SUPERUSER 与 REPLICATION；只用于本测试。
+- 样本：dbbak_app.sample_records，4 个字段、3 行，中文 A/B/C，amount 合计 601.25。
 - 恢复：独立运行 ID 对应数据目录，127.0.0.1:35433；每次验证不删除旧恢复证据。
 
 ## 真实备份与恢复结果
@@ -56,7 +56,7 @@ python scripts/phase2_postgres_verify.py
 
 - 回归运行：`run_de88b5f884e30496c6977aaf`。
 - SQL 文件 2296 字节，SHA-256 与 API 一致。
-- vault_restore 中 4 字段、3 行、金额 601.25 和中文内容一致。
+- dbbak_restore 中 4 字段、3 行、金额 601.25 和中文内容一致。
 - 错误密码与非法目录仍分别返回 AUTH_FAILED、STORAGE_NOT_WRITABLE。
 
 ## 自动化测试与构建

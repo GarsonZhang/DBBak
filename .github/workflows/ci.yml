@@ -1,5 +1,5 @@
 # 最小 CI：行尾检查、静态检查、测试与双平台构建。
-# Go 版本与 Vault_文档/Vault_兼容性矩阵.md 记录的基线保持一致。
+# Go 版本与 DBBak_文档/DBBak_兼容性矩阵.md 记录的基线保持一致。
 # 真实的数据库备份与恢复验收不在此运行，需要隔离数据库，见 scripts/。
 name: CI
 
@@ -56,4 +56,4 @@ jobs:
           CGO_ENABLED: '0'
           GOOS: ${{ matrix.goos }}
           GOARCH: amd64
-        run: go build -trimpath -buildvcs=false -o dist/vault-${{ matrix.goos }}-amd64 ./cmd/vault
+        run: go build -trimpath -buildvcs=false -o dist/dbbak-${{ matrix.goos }}-amd64 ./cmd/dbbak

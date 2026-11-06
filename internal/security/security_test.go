@@ -7,7 +7,10 @@ import (
 
 func TestPasswordAndSecretBoundaries(t *testing.T) {
 	if _, err := HashPassword("short"); err == nil {
-		t.Fatal("短密码应被拒绝")
+		t.Fatal("短于 MinPasswordLength 的密码应被拒绝")
+	}
+	if _, err := HashPassword("123456"); err != nil {
+		t.Fatalf("6 位密码应被接受: %v", err)
 	}
 	hash, err := HashPassword("correct-horse-2026")
 	if err != nil {

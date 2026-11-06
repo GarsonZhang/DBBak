@@ -10,7 +10,10 @@ import (
 	"sort"
 	"time"
 
-	"vault/internal/metadata"
+	"github.com/jlaffaye/ftp"
+
+	"dbbak/internal/metadata"
+	"dbbak/internal/security"
 )
 
 // CleanupItem 同时描述候选与保护原因。
@@ -39,11 +42,14 @@ type CleanupExecution struct {
 
 // CleanupService 计算全量恢复点保留集合并执行受控清理。
 type CleanupService struct {
-	store *metadata.Store
+	store   *metadata.Store
+	secrets *security.KeyStore
 }
 
-// NewCleanupService 创建清理服务。
-func NewCleanupService(store *metadata.Store) *CleanupService { return &CleanupService{store: store} }
+// NewCleanupService 创建清理服务；secrets 用于解密 FTP 等存储凭据。
+func NewCleanupService(store *metadata.Store, secrets *security.KeyStore) *CleanupService {
+	return &CleanupService{store: store, secrets: secrets}
+}
 
 // Preview 生成绑定任务 revision 和对象指纹的十分钟预览。
 func (c *CleanupService) Preview(ctx context.Context, jobID string) (CleanupResult, metadata.CleanupPreview, error) {
@@ -97,9 +103,28 @@ func (c *CleanupService) Execute(ctx context.Context, previewID string) ([]Clean
 	if err = json.Unmarshal([]byte(preview.Payload), &original); err != nil {
 		return nil, fmt.Errorf("清理预览内容无效: %w", err)
 	}
-	target, err := c.store.GetStorageTarget(ctx, job.TargetID)
-	if err != nil {
-		return nil, err
+	serverLocal := job.LocationKind == "database_server"
+	var target metadata.StorageTarget
+	if !serverLocal {
+		var getErr error
+		if target, getErr = c.store.GetStorageTarget(ctx, job.TargetID); getErr != nil {
+			return nil, getErr
+		}
+	}
+	var ftpConn *ftp.ServerConn
+	if target.Kind == "ftp" {
+		cipher, secretErr := c.store.StoragePassword(ctx, target.ID)
+		if secretErr != nil {
+			return nil, fmt.Errorf("读取存储凭据失败: %w", secretErr)
+		}
+		password, decryptErr := c.secrets.Decrypt(cipher)
+		if decryptErr != nil {
+			return nil, fmt.Errorf("存储凭据解密失败: %w", decryptErr)
+		}
+		if ftpConn, decryptErr = dialFTP(target, password); decryptErr != nil {
+			return nil, decryptErr
+		}
+		defer ftpConn.Quit()
 	}
 	var executions []CleanupExecution
 	for _, item := range original.Items {
@@ -109,8 +134,72 @@ func (c *CleanupService) Execute(ctx context.Context, previewID string) ([]Clean
 		execution := CleanupExecution{ArtifactID: item.Artifact.ID, Path: item.Artifact.RelativePath}
 		// 即使指纹一致，也按对象重新读取，防止后续引入批量删除时扩大范围。
 		artifact, getErr := c.store.GetArtifact(ctx, item.Artifact.ID)
-		if getErr != nil || artifact.State != "verified" || artifact.Locked {
+		if getErr != nil || artifact.Locked {
 			execution.Message = "对象状态已变化，停止删除该对象"
+			executions = append(executions, execution)
+			continue
+		}
+		if artifact.TargetID == "" {
+			// 数据库服务器本地备份：清理无法触达远程文件，只清记录并如实提示。
+			// 这类对象只能是 uploaded（无本地文件可校验），msdb 元数据即真实性凭证。
+			if artifact.State != "uploaded" {
+				execution.Message = "对象状态已变化，停止删除该对象"
+				executions = append(executions, execution)
+				continue
+			}
+			if updateErr := c.store.DeleteArtifactRecord(ctx, artifact.ID); updateErr != nil {
+				execution.Message = "记录登记失败，远程文件与记录均未处理"
+				executions = append(executions, execution)
+				continue
+			}
+			execution.Deleted = true
+			execution.Message = "记录已删除；文件在数据库服务器上，需人工删除：" + serverPathOf(artifact)
+			executions = append(executions, execution)
+			continue
+		}
+		if artifact.State != "verified" {
+			execution.Message = "对象状态已变化，停止删除该对象"
+			executions = append(executions, execution)
+			continue
+		}
+		if ftpConn != nil {
+			// FTP：回读整文件复核 SHA-256 后删除远端对象；任一步失败保持记录原状。
+			sum, hashErr := ftpDownloadHash(ftpConn, target, artifact.RelativePath)
+			if hashErr != nil {
+				if isFTPNotExist(hashErr) {
+					// 与本地一致：远端已不存在时只清记录，避免记录永久悬挂。
+					if updateErr := c.store.DeleteArtifactRecord(ctx, artifact.ID); updateErr != nil {
+						execution.Message = "远端文件已不存在，但元数据登记失败"
+						executions = append(executions, execution)
+						continue
+					}
+					execution.Deleted = true
+					execution.Message = "远端文件已不存在，仅登记删除状态"
+					executions = append(executions, execution)
+					continue
+				}
+				execution.Message = hashErr.Error()
+				executions = append(executions, execution)
+				continue
+			}
+			if sum != artifact.SHA256 {
+				execution.Message = "远端文件 SHA-256 与登记不一致，停止删除"
+				executions = append(executions, execution)
+				continue
+			}
+			remotePath, deleteErr := ftpDelete(ftpConn, target, artifact.RelativePath)
+			if deleteErr != nil {
+				execution.Message = "删除远端文件失败: " + deleteErr.Error()
+				executions = append(executions, execution)
+				continue
+			}
+			if updateErr := c.store.DeleteArtifactRecord(ctx, artifact.ID); updateErr != nil {
+				execution.Message = "远端文件已删除，但元数据状态提交失败，需要人工对账"
+				executions = append(executions, execution)
+				continue
+			}
+			execution.Deleted = true
+			execution.Message = "已删除远端文件 " + remotePath
 			executions = append(executions, execution)
 			continue
 		}

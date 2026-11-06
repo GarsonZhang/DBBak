@@ -1,19 +1,45 @@
 ﻿#Requires -Version 5.1
 #Requires -RunAsAdministrator
 [CmdletBinding()]
-param([switch]$Yes)
+param(
+    [switch]$Yes,
+    [switch]$StopService,
+    [string]$DataRoot = ''
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$ServiceName = 'Vault'
-$DataRoot = 'C:\ProgramData\Vault'
-$Database = Join-Path $DataRoot 'data\vault.db'
+$ServiceName = 'DBBak'
+if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+    # 安装器允许自定义数据目录，并会写进 HKLM\Software\DBBak\DataDir；
+    # 快照必须跟服务实际用的目录一致，否则会复制到别处或直接报“找不到元数据库”。
+    $DataRoot = 'C:\ProgramData\DBBak'
+    $registered = Get-ItemProperty -Path 'HKLM:\Software\DBBak' -Name 'DataDir' -ErrorAction SilentlyContinue
+    if ($registered -and $registered.PSObject.Properties['DataDir'] -and
+        -not [string]::IsNullOrWhiteSpace([string]$registered.PSObject.Properties['DataDir'].Value)) {
+        $DataRoot = [string]$registered.PSObject.Properties['DataDir'].Value
+    }
+}
+# 现行布局：元数据库直接位于数据根目录（由服务命令行 --data-dir 决定）。
+# 旧 WinSW 布局放在 data 子目录，这里保留回退以便升级前仍能取到快照。
+$Database = Join-Path $DataRoot 'dbbak.db'
+$LegacyDatabase = Join-Path $DataRoot 'data\dbbak.db'
+if (-not (Test-Path -LiteralPath $Database -PathType Leaf) -and (Test-Path -LiteralPath $LegacyDatabase -PathType Leaf)) {
+    $Database = $LegacyDatabase
+}
 $MasterKey = Join-Path $DataRoot 'key\master.key'
 $MaintenanceRoot = Join-Path $DataRoot 'maintenance'
 
 $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if (-not $service) { throw "服务 $ServiceName 不存在。" }
-if ($service.Status -ne 'Stopped') { throw '必须先停止 Vault 服务；运行中只复制 vault.db 不符合 WAL 一致性要求。' }
+if ($service.Status -ne 'Stopped') {
+    if (-not $StopService) {
+        throw '必须先停止 DBBak 服务；运行中只复制 dbbak.db 不符合 WAL 一致性要求。加 -StopService 可让本脚本先停服。'
+    }
+    Write-Host "停止服务 $ServiceName ..."
+    Stop-Service -Name $ServiceName -Force
+    $service.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(60))
+}
 if (-not (Test-Path -LiteralPath $Database -PathType Leaf)) { throw "找不到元数据库 $Database。" }
 if (-not (Test-Path -LiteralPath $MasterKey -PathType Leaf)) { throw "找不到独立主密钥 $MasterKey。" }
 
@@ -32,7 +58,7 @@ $databaseStage = Join-Path $stage 'database'
 $keyStage = Join-Path $stage 'key'
 $copiedFiles = New-Object 'System.Collections.Generic.List[string]'
 $timestamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
-$archive = Join-Path $MaintenanceRoot "vault-metadata-$timestamp-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).zip"
+$archive = Join-Path $MaintenanceRoot "dbbak-metadata-$timestamp-$([Guid]::NewGuid().ToString('N').Substring(0, 8)).zip"
 $tempArchive = "$archive.tmp.zip"
 
 try {

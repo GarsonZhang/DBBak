@@ -1,5 +1,5 @@
 .tools/
-.vault/
+.dbbak/
 .test-runtime/
 dist/
 coverage.out
@@ -7,7 +7,9 @@ coverage.out
 __pycache__/
 *.pyc
 .workbuddy/
-/vault
-/vault.exe
-/vault-agent
-/vault-agent.exe
+/dbbak
+/dbbak.exe
+# 本地联调时放在仓库根的客户端工具目录（安装包自带 tools 由构建脚本生成到 dist）
+/tools/
+/dbbak-agent
+/dbbak-agent.exe

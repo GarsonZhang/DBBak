@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 func TestSQLServerToolAndPathValidation(t *testing.T) {
@@ -15,7 +15,7 @@ func TestSQLServerToolAndPathValidation(t *testing.T) {
 	if _, err := client.Version(context.Background()); err == nil || ErrorCode(err) != "TOOL_MISSING" {
 		t.Fatalf("缺失 sqlcmd 应返回 TOOL_MISSING: %v", err)
 	}
-	source := metadata.Source{Engine: "sqlserver", Host: `localhost\MSSQLSERVER`, Port: 1433, Database: "vault_test_source", Username: "integrated"}
+	source := metadata.Source{Engine: "sqlserver", Host: `localhost\MSSQLSERVER`, Port: 1433, Database: "dbbak_test_source", Username: "integrated"}
 	if _, err := client.Execute(context.Background(), source, metadata.StorageTarget{}, "", t.TempDir(), BackupSpec{Type: "full"}); err == nil || ErrorCode(err) != "SERVER_PATH_REQUIRED" {
 		t.Fatalf("缺少数据库服务路径应明确失败: %v", err)
 	}
@@ -27,15 +27,15 @@ func TestSQLServerConnectionModes(t *testing.T) {
 	if !strings.Contains(trusted, "-E") || strings.Contains(trusted, "-U") {
 		t.Fatalf("受信任连接参数错误: %s", trusted)
 	}
-	sqlLogin := strings.Join(client.connectionArgs(metadata.Source{Host: "db.example", Port: 1433, Username: "vault_test"}), " ")
-	if !strings.Contains(sqlLogin, "tcp:db.example,1433") || !strings.Contains(sqlLogin, "-U vault_test") {
+	sqlLogin := strings.Join(client.connectionArgs(metadata.Source{Host: "db.example", Port: 1433, Username: "dbbak_test"}), " ")
+	if !strings.Contains(sqlLogin, "tcp:db.example,1433") || !strings.Contains(sqlLogin, "-U dbbak_test") {
 		t.Fatalf("SQL 登录参数错误: %s", sqlLogin)
 	}
 }
 
 // msdb.dbo.backupset 没有 backup_lsn 列；回归测试防止再次写出无效查询。
 func TestSQLServerBackupMetadataQueryUsesRealColumns(t *testing.T) {
-	query := backupMetadataQuery("vault_test_source", "full")
+	query := backupMetadataQuery("dbbak_test_source", "full")
 	for _, column := range []string{"backup_set_id", "first_lsn", "last_lsn", "database_backup_lsn", "checkpoint_lsn"} {
 		if !strings.Contains(query, column) {
 			t.Fatalf("备份元数据查询缺少列 %s: %s", column, query)

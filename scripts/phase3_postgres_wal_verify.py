@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """对隔离 PostgreSQL 18.6 执行真实全量备份和 WAL 目标 LSN 恢复验证。
 
-源实例固定为 127.0.0.1:35432/vault_pg，恢复实例只使用本次唯一目录和端口。
+源实例固定为 127.0.0.1:35432/dbbak_pg，恢复实例只使用本次唯一目录和端口。
 本脚本不会修改源集群配置，也不会删除本次以外的任何恢复目录。
 
 前置配置由主代理完成。所需归档目录：
@@ -32,14 +32,14 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".test-runtime"
-PG_HOME = Path(os.environ.get("VAULT_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
+PG_HOME = Path(os.environ.get("DBBAK_TEST_PG_HOME", ROOT / ".tools/postgresql-18.6/pgsql"))
 SOURCE_DATA = RUNTIME / "pg-source-data"
 ARCHIVE = RUNTIME / "pg-wal-archive"
 VERIFY_ROOT = RUNTIME / "phase3-wal-verify"
 SOURCE_HOST = "127.0.0.1"
 SOURCE_PORT = 35432
-SOURCE_USER = "vault_pg"
-DATABASE = "vault_app"
+SOURCE_USER = "dbbak_pg"
+DATABASE = "dbbak_app"
 REQUIRED_VERSION = "18.6"
 SNAPSHOT_SQL = (
     "SELECT json_agg(row_to_json(t) ORDER BY t.id) FROM "

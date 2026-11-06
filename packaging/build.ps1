@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z._-]*$')][string]$Version = '0.2.0-phase2',
+    [ValidatePattern('^[0-9A-Za-z][0-9A-Za-z._-]*$')][string]$Version = '0.2.0-phase5',
     [ValidateSet('linux', 'windows')][string]$GOOS = '',
     [ValidateSet('amd64', 'arm64')][string]$GOARCH = '',
     [string]$OutputDir = ''
@@ -19,7 +19,7 @@ if (-not $env:SOURCE_DATE_EPOCH) { $env:SOURCE_DATE_EPOCH = '0' }
 if (-not $GOOS) { $GOOS = (& go env GOOS); if ($LASTEXITCODE -ne 0) { throw 'go env GOOS 失败。' } }
 if (-not $GOARCH) { $GOARCH = (& go env GOARCH); if ($LASTEXITCODE -ne 0) { throw 'go env GOARCH 失败。' } }
 if (-not $OutputDir) { $OutputDir = Join-Path $ProjectRoot "dist\$Version\${GOOS}_$GOARCH" }
-$BinaryName = if ($GOOS -eq 'windows') { 'vault.exe' } else { 'vault' }
+$BinaryName = if ($GOOS -eq 'windows') { 'dbbak.exe' } else { 'dbbak' }
 $TempBinary = Join-Path $OutputDir ".$BinaryName.tmp.$PID"
 
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
@@ -28,7 +28,7 @@ $env:GOARCH = $GOARCH
 try {
     Push-Location $ProjectRoot
     try {
-        & go build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid=' -o $TempBinary ./cmd/vault
+        & go build -mod=readonly -trimpath -buildvcs=false '-ldflags=-s -w -buildid=' -o $TempBinary ./cmd/dbbak
         if ($LASTEXITCODE -ne 0) { throw "go build 失败，退出码 $LASTEXITCODE。" }
     } finally {
         Pop-Location

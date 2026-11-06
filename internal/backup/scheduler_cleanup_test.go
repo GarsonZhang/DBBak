@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"vault/internal/metadata"
+	"dbbak/internal/metadata"
 )
 
 func TestSchedulerAutoCleanupUsesProtectionPipeline(t *testing.T) {
 	ctx := context.Background()
-	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "vault.db"))
+	store, err := metadata.Open(ctx, filepath.Join(t.TempDir(), "dbbak.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSchedulerAutoCleanupUsesProtectionPipeline(t *testing.T) {
 	}
 	oldArtifact := createTestArtifact(t, store, job, target, "auto-old", now.Add(-60*24*time.Hour))
 	newArtifact := createTestArtifact(t, store, job, target, "auto-new", now)
-	scheduler := NewScheduler(store, nil, NewCleanupService(store), time.Second)
+	scheduler := NewScheduler(store, nil, NewCleanupService(store, nil), time.Second)
 	scheduler.runAutoCleanup(ctx, now)
 	deleted, err := store.GetArtifact(ctx, oldArtifact.ID)
 	if err != nil || deleted.State != "deleted" {

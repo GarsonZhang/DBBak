@@ -11,10 +11,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'dev-env.ps1')
 $Runtime = Join-Path $Root '.test-runtime'
-$DataDir = Join-Path $Runtime 'vault-data'
+$DataDir = Join-Path $Runtime 'dbbak-data'
 $BackupRoot = Join-Path $Runtime 'backup-root'
-$Binary = Join-Path $Runtime 'vault.exe'
+$Binary = Join-Path $Runtime 'dbbak.exe'
 $GoExe = Join-Path $Root '.tools\go\bin\go.exe'
 $PasswordFile = Join-Path $Runtime 'admin-password'
 
@@ -36,28 +37,17 @@ if ($Build -or -not (Test-Path -LiteralPath $Binary)) {
         throw "未找到便携 Go 工具链 $GoExe；也可自行安装 Go 1.27.3 后手动构建。"
     }
     Write-Host "构建 $Binary ..."
+    Set-DbbakGoEnv -Root $Root
     Push-Location $Root
     try {
-        & $GoExe build -trimpath -o $Binary ./cmd/vault
+        & $GoExe build -trimpath -o $Binary ./cmd/dbbak
         if ($LASTEXITCODE -ne 0) { throw "构建失败，退出码 $LASTEXITCODE。" }
     } finally {
         Pop-Location
     }
 }
 
-$env:VAULT_DATA_DIR = $DataDir
-$env:VAULT_BACKUP_ROOT = $BackupRoot
-$env:VAULT_ADDR = "127.0.0.1:$Port"
-$env:VAULT_SCHEDULER_INTERVAL = '2s'
-# SQL Server 已于 2026-11-02 完成真实备份与异名恢复验收，开发环境显式开启任务创建。
-$env:VAULT_SQLSERVER_ENABLED = '1'
-
-# 客户端路径指向便携安装；文件缺失时连接测试会返回 TOOL_MISSING，不会伪造成功。
-$env:VAULT_MYSQL = Join-Path $Root '.tools\mysql-8.4.13-winx64\bin\mysql.exe'
-$env:VAULT_MYSQLDUMP = Join-Path $Root '.tools\mysql-8.4.13-winx64\bin\mysqldump.exe'
-$env:VAULT_PSQL = Join-Path $Root '.tools\postgresql-18.6\pgsql\bin\psql.exe'
-$env:VAULT_PG_BASEBACKUP = Join-Path $Root '.tools\postgresql-18.6\pgsql\bin\pg_basebackup.exe'
-if (Get-Command sqlcmd -ErrorAction SilentlyContinue) { $env:VAULT_SQLCMD = 'sqlcmd' }
+Set-DbbakDevEnv -Root $Root -Port $Port
 
 Write-Host "数据目录: $DataDir"
 Write-Host "备份目录: $BackupRoot"

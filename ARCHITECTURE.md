@@ -1,12 +1,12 @@
-# ARCHITECTURE.md | Vault 数据库备份管理
+# ARCHITECTURE.md | DBBak 数据库备份管理
 
 > 本文件只记录稳定、可长期复用的架构事实：系统边界、模块职责、数据流、核心接口与已知约束。
-> 阶段进度、待办和验证结果不写在这里，分别见 `TASKS.md` 和 `Vault_文档/`。
+> 阶段进度、待办和验证结果不写在这里，分别见 `TASKS.md` 和 `DBBak_文档/`。
 > 与代码冲突时以代码为准，并同步修正本文件。
 
 ## 1 系统边界
 
-Vault 是**单实例**的数据库备份控制台：一个 Go 进程同时提供 REST API、中文 Web 界面、后台调度和本地执行器。没有独立的控制面集群，也没有外部消息队列。
+DBBak 是**单实例**的数据库备份控制台：一个 Go 进程同时提供 REST API、中文 Web 界面、后台调度和本地执行器。没有独立的控制面集群，也没有外部消息队列。
 
 三条边界必须保持清晰：
 
@@ -35,7 +35,7 @@ security.KeyStore ──> master.key（AES-GCM，独立于 SQLite）
 
 | 路径 | 职责 | 边界 |
 | --- | --- | --- |
-| `cmd/vault/` | `init-admin`、`serve`、`version` 三个子命令 | 只做装配，不含业务逻辑 |
+| `cmd/dbbak/` | `init-admin`、`serve`、`version` 三个子命令 | 只做装配，不含业务逻辑 |
 | `cmd/agent/` | 远程 Agent 客户端入口（当前仅 enroll） | 不承载备份逻辑 |
 | `internal/api/` | 路由、认证、CSRF 同源校验、参数校验、静态资源 | 不直接调用数据库工具 |
 | `internal/backup/` | 适配器注册表、执行器、调度、路径约束、清理 | 唯一允许启动外部进程的位置 |
@@ -56,9 +56,9 @@ Go 模块根位于仓库根目录，`go build ./...`、`go test ./...` 可直接
 2. 创建 run，状态 `queued`，`attempt=1`，三态字段初始化为 `not_run / pending / not_run`。
 3. 读取并解密凭据，登记 `running`，写运行日志。
 4. 采集工具版本，建立 artifact 记录（`state=writing`）。
-5. 在仓库内创建**唯一工作目录** `{database}/{yyyy}/{mm}/.{run_id}.attempt-1/`，由适配器写入实际产物。
+5. 在仓库内创建**唯一工作目录** `{subdir}/{database}/{yyyy}/{mm}/.{run_id}.attempt-1/`，由适配器写入实际产物。`subdir` 来自任务配置（可为空），因此同一根目录可被多个实例共用而不混放；`subdir` 在保存与每次运行前各校验一次，越界即失败。
 6. 校验产物大小与 SHA-256，`run.state=verifying`。
-7. 提交为最终文件 `{database}/{yyyy}/{mm}/{run_id}{ext}`，artifact 置 `verified`，run 置 `succeeded`。
+7. 提交为最终文件 `{subdir}/{database}/{yyyy}/{mm}/{run_id}{ext}`，artifact 置 `verified`，run 置 `succeeded`。
 8. 任一步失败：run 置 `failed`，artifact 置 `quarantined`，记录结构化错误码；不删除失败产物，留作对账。
 
 临时目录与最终文件使用不同路径，是为了让中断、重试和审计都能分辨"这条记录对应哪个物理文件"。
@@ -87,20 +87,26 @@ Go 模块根位于仓库根目录，`go build ./...`、`go test ./...` 可直接
 
 SQLite 12 张表：`users`、`sessions`、`secrets`、`sources`、`storage_targets`、`jobs`、`runs`、`run_logs`、`artifacts`、`cleanup_previews`、`audit_events`、`schema_migrations`。
 
-迁移为递增版本，当前 v3：
+迁移为递增版本，当前 v9：
 
 | 版本 | 变更 |
 | --- | --- |
 | 1 | 基础表结构 |
 | 2 | `artifacts.engine_metadata`（物理/逻辑范围、system identifier、LSN 等） |
 | 3 | `storage_targets.server_root`（数据库服务侧路径，供 SQL Server 区分执行器路径与实例路径） |
+| 4 | `jobs.backup_type`（full/differential/log） |
+| 5 | `jobs.subdir`（任务级输出子目录，历史任务为空即写入根目录） |
+| 6 | 备份位置模型：`jobs.target_id` 与 `artifacts.target_id` 允许为空（`location_kind=database_server`） |
+| 7 | FTP 存储：`storage_targets` 增加 `host/port/username/secret_ref/passive` |
+| 8 | 对象存储：`storage_targets` 增加 `bucket/region/use_ssl/path_style` |
+| 9 | 备份路线：`jobs.backup_method`、`artifacts.backup_method`；历史对象按实际工具回填 |
 
 时间统一按 UTC 存储，任务另存时区；配置更新使用 `revision` 乐观并发。
 
 ## 6 核心接口
 
 - REST：`/api/v1` 下 29 条路由，覆盖认证、概览、能力、设置、数据源、存储、任务、运行、日志、备份文件、清理预览与执行、恢复验证。除登录和健康检查外全部要求会话认证。
-- 静态资源：`/` 及 `web/` 内容由同一进程提供，前端需要 `X-Vault-Request` 同源确认头。
+- 静态资源：`/` 及 `web/` 内容由同一进程提供，前端需要 `X-DBBak-Request` 同源确认头。
 - Agent 协议：`/agent/v1/enroll`、`/leases/pull`、`/leases/{id}/heartbeat`、`/runs/{id}/events`、`/runs/{id}/complete`。**客户端已实现并测试，服务端未实现。**
 
 ## 7 适配器契约
@@ -112,17 +118,28 @@ type Adapter interface {
     Engine() string
     Version(ctx) (string, error)
     Probe(ctx, source, password) (string, error)
-    Execute(ctx, source, target, password, workPath) (ExecuteResult, error)
+    Execute(ctx, source, target, password, workPath, spec BackupSpec) (ExecuteResult, error)
 }
 ```
 
 `ExecuteResult` 返回产物路径、扩展名、方法与 `engine_metadata`。设计文档中的 `Plan`、`CollectManifest`、`Verify`、`Cancel`、`Reconcile` 尚未进入接口——差异、增量、日志链必须新增能力，不得用重复全量伪装。
 
-| 引擎 | 工具 | 语义 |
-| --- | --- | --- |
-| MySQL | `mysqldump` | 单库逻辑全量，不带 `CREATE DATABASE`/`USE` |
-| PostgreSQL | `pg_basebackup --format=tar` | 整实例物理全量，含恢复所需 WAL |
-| SQL Server | `sqlcmd` + `BACKUP DATABASE` / `BACKUP LOG` | 全量、差异、事务日志；链式恢复已验证，任务需 `VAULT_SQLSERVER_ENABLED=1` |
+同一引擎可以存在多条**备份路线**，由可选的 `RouteNamer` 接口声明：
+
+```go
+type RouteNamer interface { Method() string }
+```
+
+`Registry` 以「引擎 + 路线」为键；`ForRoute(engine, method)` 显式选择，`ForEngine` 取默认路线。路线未实现时返回错误，**不静默回退**到默认路线——否则配置错误会被执行成另一种备份。`BackupSpec.Base` 携带同路线上一份对象，供日志与增量确定起点；恢复链按 `artifacts.backup_method` 过滤，逻辑与物理产物不能互为基线。
+
+| 引擎 | 路线 | 工具 | 语义 |
+| --- | --- | --- | --- |
+| MySQL | `logical`（默认） | `mysqldump` | 单库逻辑全量，不带 `CREATE DATABASE`/`USE` |
+| MySQL | `physical` | `xtrabackup` + `mysqlbinlog` | 整实例物理全量（`--stream=xbstream` 单文件）、binlog 归档 |
+| PostgreSQL | `physical` | `pg_basebackup --format=tar` | 整实例物理全量，含恢复所需 WAL |
+| SQL Server | `native` | `sqlcmd` + `BACKUP DATABASE` / `BACKUP LOG` | 全量、差异、事务日志；链式恢复已验证，任务需 `DBBAK_SQLSERVER_ENABLED=1` |
+
+MySQL 物理路线的前提是**执行器与实例同机**：XtraBackup 直接读取数据目录，跨主机必须依赖远程 Agent（阶段四，未实现）。它只提供 Linux 二进制，Windows 上的能力状态是 `unsupported` 而非 `prerequisite_missing`。工具主版本必须与 MySQL 主版本对齐，探测不通过即拒绝。是否开放由 `DBBAK_MYSQL_PHYSICAL_ENABLED` 控制，默认关闭。
 
 ## 8 关键设计决定
 
@@ -143,5 +160,8 @@ type Adapter interface {
 - **日志链未产品化**：MySQL binlog 与 PostgreSQL WAL 已用独立脚本真实验证，但归档管理、恢复链和 PITR 未进入任务模型。
 - **Agent 只有客户端**：mTLS、一次性注册与 fence 已实现并测试，服务端 `/agent/v1` 未实现，无法接 Runner。
 - **单角色**：只有管理员，操作员与只读审计员未实现，权限边界靠服务端鉴权而非前端隐藏。
-- **无 S3/NAS 适配**：仅本地目录，`storage_targets` 已留 `kind` 字段。
+- **已接入对象存储，无 NAS 原生适配**：`storage_targets.kind` 现有 `local` / `unc` / `ftp` / `oss` 四种。`oss` 走 S3 兼容协议（AWS SDK for Go v2 + 自定义 Endpoint），阿里云 OSS、MinIO、AWS S3 共用同一实现；NAS 仍依赖 `unc` 路径或本地挂载，没有厂商专有协议适配。
 - **未做容量治理**：无仓库空间预检与配额，清理释放空间为估算。
+- **MySQL 物理路线未验收**：`internal/backup/mysqlphysical.go` 已实现全量与 binlog 归档，但开发环境为 Windows，`xtrabackup` 无 Windows 二进制，因此**从未在真实 MySQL 上执行过一次物理备份与恢复**。能力矩阵默认 `unverified`，需在 Linux 上按 `DBBak_文档/DBBak_MySQL物理备份验证说明.md` 完成真实全量、`--prepare`、隔离恢复与 binlog 重放后，才可设置 `DBBAK_MYSQL_PHYSICAL_ENABLED=1`。
+- **MySQL 物理增量未实现**：XtraBackup 的 `--incremental-basedir` 需要逐级保留 checkpoints 并逐级 prepare，当前元数据模型没有承载这条链，因此 `differential` 明确返回 `BACKUP_TYPE_UNSUPPORTED`，不用重复全量冒充。
+- **binlog 归档不是常驻进程**：每次 `log` 运行只做一次「上次终点 → 当前位点」的点到点归档，不启动 `--stop-never`。真正的连续归档需要独立服务生命周期，属于后续设计；归档期间活动文件只覆盖到取值时刻，元数据以 `active_partial=true` 标明。

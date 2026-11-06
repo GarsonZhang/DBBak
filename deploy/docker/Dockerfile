@@ -9,25 +9,25 @@ COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 COPY web/ ./web/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false \
-    -ldflags='-s -w -buildid=' -o /out/vault ./cmd/vault
+    -ldflags='-s -w -buildid=' -o /out/dbbak ./cmd/dbbak
 
 FROM mysql:8.4.13
-LABEL org.opencontainers.image.version="0.2.0-phase2"
+LABEL org.opencontainers.image.version="0.2.0-phase5"
 RUN microdnf install -y curl && microdnf clean all \
-    && groupadd --system --gid 10001 vault \
-    && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /sbin/nologin vault \
-    && mkdir -p /var/lib/vault /backups /etc/vault-key \
-    && chown -R 10001:10001 /var/lib/vault /backups /etc/vault-key
-COPY --from=build --chown=10001:10001 /out/vault /usr/local/bin/vault
-ENV VAULT_ADDR=0.0.0.0:8080 \
-    VAULT_DATA_DIR=/var/lib/vault \
-    VAULT_DATABASE=/var/lib/vault/vault.db \
-    VAULT_BACKUP_ROOT=/backups \
-    VAULT_MASTER_KEY_FILE=/etc/vault-key/master.key \
-    VAULT_MYSQL=mysql \
-    VAULT_MYSQLDUMP=mysqldump
-VOLUME ["/var/lib/vault", "/backups", "/etc/vault-key"]
+    && groupadd --system --gid 10001 dbbak \
+    && useradd --system --uid 10001 --gid 10001 --no-create-home --shell /sbin/nologin dbbak \
+    && mkdir -p /var/lib/dbbak /backups /etc/dbbak-key \
+    && chown -R 10001:10001 /var/lib/dbbak /backups /etc/dbbak-key
+COPY --from=build --chown=10001:10001 /out/dbbak /usr/local/bin/dbbak
+ENV DBBAK_ADDR=0.0.0.0:8080 \
+    DBBAK_DATA_DIR=/var/lib/dbbak \
+    DBBAK_DATABASE=/var/lib/dbbak/dbbak.db \
+    DBBAK_BACKUP_ROOT=/backups \
+    DBBAK_MASTER_KEY_FILE=/etc/dbbak-key/master.key \
+    DBBAK_MYSQL=mysql \
+    DBBAK_MYSQLDUMP=mysqldump
+VOLUME ["/var/lib/dbbak", "/backups", "/etc/dbbak-key"]
 EXPOSE 8080
 USER 10001:10001
-ENTRYPOINT ["/usr/local/bin/vault"]
+ENTRYPOINT ["/usr/local/bin/dbbak"]
 CMD ["serve"]

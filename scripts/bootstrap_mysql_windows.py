@@ -15,7 +15,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".test-runtime"
-HOME = Path(os.environ.get("VAULT_TEST_MYSQL_HOME", ROOT / ".tools/mysql-8.4.13-winx64"))
+HOME = Path(os.environ.get("DBBAK_TEST_MYSQL_HOME", ROOT / ".tools/mysql-8.4.13-winx64"))
 DATA = RUNTIME / "mysql-data"
 BASE = ["--protocol=TCP", "--host=127.0.0.1", "--port=33306"]
 
@@ -44,18 +44,18 @@ def seed() -> None:
     password_file.write_text(password, encoding="ascii")
     password_file.chmod(0o600)
     sql = (
-        "CREATE DATABASE IF NOT EXISTS vault_source CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
-        "CREATE DATABASE IF NOT EXISTS vault_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
-        "CREATE USER IF NOT EXISTS 'vault_test'@'%' IDENTIFIED BY '" + password + "';"
-        "ALTER USER 'vault_test'@'%' IDENTIFIED BY '" + password + "';"
-        "GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, RELOAD ON *.* TO 'vault_test'@'%';"
-        "GRANT ALL PRIVILEGES ON vault_source.* TO 'vault_test'@'%';"
-        "GRANT ALL PRIVILEGES ON vault_restore.* TO 'vault_test'@'%';"
-        "CREATE TABLE IF NOT EXISTS vault_source.sample_records ("
+        "CREATE DATABASE IF NOT EXISTS dbbak_source CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+        "CREATE DATABASE IF NOT EXISTS dbbak_restore CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;"
+        "CREATE USER IF NOT EXISTS 'dbbak_test'@'%' IDENTIFIED BY '" + password + "';"
+        "ALTER USER 'dbbak_test'@'%' IDENTIFIED BY '" + password + "';"
+        "GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES, RELOAD ON *.* TO 'dbbak_test'@'%';"
+        "GRANT ALL PRIVILEGES ON dbbak_source.* TO 'dbbak_test'@'%';"
+        "GRANT ALL PRIVILEGES ON dbbak_restore.* TO 'dbbak_test'@'%';"
+        "CREATE TABLE IF NOT EXISTS dbbak_source.sample_records ("
         "id BIGINT PRIMARY KEY,name VARCHAR(100) NOT NULL,amount DECIMAL(12,2) NOT NULL,"
         "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB;"
-        "TRUNCATE TABLE vault_source.sample_records;"
-        "INSERT INTO vault_source.sample_records(id,name,amount) VALUES "
+        "TRUNCATE TABLE dbbak_source.sample_records;"
+        "INSERT INTO dbbak_source.sample_records(id,name,amount) VALUES "
         "(1,'隔离验证-A',100.50),(2,'隔离验证-B',200.75),(3,'隔离验证-C',300.00);FLUSH PRIVILEGES;"
     )
     run([HOME / "bin/mysql.exe", *BASE, "--user=root", "--default-character-set=utf8mb4", "--execute", sql])

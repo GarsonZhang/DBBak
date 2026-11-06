@@ -1,14 +1,14 @@
-# Vault 数据库备份管理产品需求文档
+# DBBak 数据库备份管理产品需求文档
 
 面向 Windows Linux 与 Docker 的统一备份管理
 
 版本：1.0 · 日期：2026-10-30 · 状态：设计评审稿
 
-配套文件：[开发文档](Vault_开发文档.md) · [原型设计说明](Vault_原型设计说明.md) · [HTML 交互原型](../web/index.html)
+配套文件：[开发文档](DBBak_开发文档.md) · [原型设计说明](DBBak_原型设计说明.md) · [HTML 交互原型](../web/index.html)
 
 ## 1 产品定位与交付范围
 
-Vault 面向运维人员与数据库管理员，通过 Web 控制台管理 SQL Server、MySQL 和 PostgreSQL 的备份任务，由后台执行周期备份、日志归档与旧文件清理。本文将用户所述 SQL 按 Microsoft SQL Server 处理。
+DBBak 面向运维人员与数据库管理员，通过 Web 控制台管理 SQL Server、MySQL 和 PostgreSQL 的备份任务，由后台执行周期备份、日志归档与旧文件清理。本文将用户所述 SQL 按 Microsoft SQL Server 处理。
 
 正式版采用同一管理核心，提供 Windows 原生服务、Linux systemd 服务及 Docker Linux 容器镜像。关闭浏览器后继续调度。数据库可位于其他服务器；实际能力由数据库版本、所在系统、适配器和执行器共同决定。
 
