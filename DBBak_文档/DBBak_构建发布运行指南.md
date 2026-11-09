@@ -488,9 +488,15 @@ sudo ./deploy/linux/uninstall.sh --yes
 | 阶段 | 基础镜像 | 作用 |
 | --- | --- | --- |
 | build | `golang:1.27.3-bookworm` | 只复制 `go.mod`/`go.sum`、`embed.go`、`cmd/`、`internal/`、`web/`，`CGO_ENABLED=0` 构建 |
-| runtime | `mysql:8.4.13` | 自带 `mysql`/`mysqldump`，安装 curl，创建 UID/GID 10001 非 root 用户 |
+| runtime | `mysql:8.4.13` | 自带 `mysql`/`mysqldump`，安装 curl 与 `sqlcmd`（微软 mssql-tools18），创建 UID/GID 10001 非 root 用户 |
 
 运行时目录：`/var/lib/dbbak`（数据）、`/backups`（仓库）、`/etc/dbbak-key`（主密钥），三者都声明为 `VOLUME`。默认 `CMD ["serve"]`，监听 `0.0.0.0:8080`。
+
+SQL Server 路线完全依赖 `sqlcmd`（`internal/backup/sqlserver.go`：连接探测 `SELECT @@VERSION`、`BACKUP DATABASE`、`msdb` 元数据查询都走它），而 `mysql:8.4.13` 只带 MySQL 客户端。所以镜像在 runtime 阶段从微软 RHEL 9 源装 `msodbcsql18` 与 `mssql-tools18`，并把 `/opt/mssql-tools18/bin/sqlcmd` 软链到 `/usr/local/bin/sqlcmd`（`config.Load` 不做 tools 目录解析，只按 PATH 查找）。
+
+- 该步骤需访问 `packages.microsoft.com`，国内网络可能很慢；构建失败先确认容器能否出网，不要改成跳过校验。
+- `ACCEPT_EULA=Y` 表示接受微软命令行工具许可条款；再分发镜像前需单独做许可审查。
+- 只用 MySQL/PostgreSQL 的部署可用 `--build-arg INSTALL_SQLCMD=0` 跳过，镜像小约 100MB。
 
 ### 7.2 构建镜像
 
@@ -506,6 +512,12 @@ docker build --build-arg GOPROXY=https://proxy.golang.org,direct \
 ```
 
 模块代理仍不可达时，先确认构建容器能否出网。`docker build --network host` 只共用宿主网络命名空间，代理地址本身不通时无效；这种情况应改为配置可达的 `GOPROXY`，而不是关闭校验。
+
+runtime 阶段的 `sqlcmd` 默认安装，需要关闭时：
+
+```bash
+docker build --build-arg INSTALL_SQLCMD=0 -f deploy/docker/Dockerfile -t dbbak:mysql-only .
+```
 
 ### 7.3 Compose 启动
 
@@ -540,7 +552,7 @@ unset DBBAK_ADMIN_PASSWORD
 
 - 容器内的 `/backups` 是**执行器**路径，`mysqldump`/`pg_basebackup` 由容器进程写出，没问题。
 - **SQL Server 例外**：`BACKUP DATABASE` 的目标路径必须能被 SQL Server 实例访问，容器内路径对它不可见。必须用 `storage_targets.server_root` 映射到数据库主机上的真实目录。
-- 容器内没有 `sqlcmd` 时，SQL Server 适配器会报 `TOOL_MISSING`，不会伪造成功。
+- 镜像默认带 `sqlcmd`；用 `INSTALL_SQLCMD=0` 构建的镜像没有它，SQL Server 适配器会报 `TOOL_MISSING`，不会伪造成功。用 `docker exec dbbak sqlcmd -?` 可确认工具是否在 PATH 中。
 
 ### 7.6 升级与数据保留
 

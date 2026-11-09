@@ -37,6 +37,7 @@
 - 远程 Agent：mTLS 客户端、一次性注册、CSR、fence、递增序号、去重、有界重试；单元和 httptest 通过。
 - 独立全量自动清理：每天 05:00 后运行，复用预览、指纹、路径、哈希和最低份数保护；测试通过。
 - Windows 原生服务（`dbbak.exe` 内置 `svc.Run`）与 Inno Setup 图形安装包、Linux systemd、Docker/Compose、跨平台构建脚本已交付并通过静态检查；WinSW 包装器已移除。
+- Docker 镜像补装 `sqlcmd`：runtime 阶段从微软 RHEL 9 源装 `msodbcsql18` + `mssql-tools18` 并软链到 `/usr/local/bin/sqlcmd`，`INSTALL_SQLCMD=0` 可跳过；此前镜像只有 MySQL 客户端，SQL Server 连接测试固定报 `TOOL_MISSING`。**镜像未构建、容器未启动（本机无 Docker），该层未验证。**
 
 ### 手动删除任务与备份对象（2026-11-03）
 
