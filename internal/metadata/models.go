@@ -15,17 +15,21 @@ type User struct {
 
 // Source 是数据源的安全视图，凭据只通过 SecretRef 关联。
 type Source struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Engine    string    `json:"engine"`
-	Host      string    `json:"host"`
-	Port      int       `json:"port"`
-	Database  string    `json:"database"`
-	Username  string    `json:"username"`
-	SecretRef string    `json:"-"`
-	Revision  int64     `json:"revision"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Engine    string `json:"engine"`
+	Host      string `json:"host"`
+	Port      int    `json:"port"`
+	Database  string `json:"database"`
+	Username  string `json:"username"`
+	// TrustServerCertificate 只对 SQL Server 生效：自建实例普遍使用自签名证书，
+	// 而 ODBC Driver 18 默认强制校验证书，不信任时连接必然失败。放在数据源上是因为
+	// 同一部署里可能同时存在自建实例（需信任）和云上受信证书实例（不应信任）。
+	TrustServerCertificate bool      `json:"trust_server_certificate"`
+	SecretRef              string    `json:"-"`
+	Revision               int64     `json:"revision"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // StorageTarget 描述备份落点登记：local/unc 为文件系统目录，ftp 为远程文件服务器，

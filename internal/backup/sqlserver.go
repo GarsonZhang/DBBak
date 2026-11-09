@@ -183,6 +183,16 @@ func backupMetadataQuery(database, kind string) string {
 		"FROM msdb.dbo.backupset WHERE database_name = '%s' AND type = '%s' ORDER BY backup_set_id DESC;", database, setType)
 }
 
+// connectionArgs 组装 sqlcmd 连接参数。
+//
+// ODBC Driver 18 默认 Encrypt=yes 且强制校验证书，自建/测试实例几乎都是 SQL Server
+// 自签名的实例证书，此时必须带 -C（TrustServerCertificate=yes），否则连接只会返回
+//
+//	SSL Provider: certificate verify failed:self-signed certificate
+//
+// 是否信任由数据源上的 trust_server_certificate 决定，不在代码里写死：同一部署里可能
+// 同时有自建实例（需信任）和云上使用受信证书的实例（应保持严格校验）。-C 只放弃证书
+// 链校验，加密通道和登录认证都不受影响。
 func (c SQLServerClient) connectionArgs(source metadata.Source) []string {
 	server := source.Host
 	if source.Port > 0 {
@@ -193,6 +203,9 @@ func (c SQLServerClient) connectionArgs(source metadata.Source) []string {
 		args = append(args, "-E")
 	} else {
 		args = append(args, "-U", source.Username)
+	}
+	if source.TrustServerCertificate {
+		args = append(args, "-C")
 	}
 	return args
 }
@@ -221,6 +234,11 @@ func (c SQLServerClient) run(ctx context.Context, args []string, password, _ str
 		message = "找不到 sqlcmd，请安装 Microsoft Command Line Utilities 或通过 DBBAK_SQLCMD 指定路径"
 	case strings.Contains(lower, "login failed"):
 		code = "AUTH_FAILED"
+	// 证书错误单列：默认已带 -C，仍出现说明是服务端要求强制加密或证书被中间人替换，
+	// 这是需要人工判断的安全问题，不能混进 NETWORK_ERROR 让人误以为是网络抖动。
+	case strings.Contains(lower, "certificate verify failed") || strings.Contains(lower, "self-signed certificate"):
+		code = "TLS_VERIFY_FAILED"
+		message = "SQL Server 证书校验失败（" + message + "）；请确认实例未强制使用不匹配的证书，或在数据库侧配置受信证书"
 	case strings.Contains(lower, "could not open a connection") || strings.Contains(lower, "connection refused"):
 		code = "NETWORK_ERROR"
 	case strings.Contains(lower, "access is denied") || strings.Contains(lower, "operating system error 5"):

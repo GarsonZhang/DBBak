@@ -220,6 +220,17 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if version < 10 {
+		// SQL Server 证书信任开关：ODBC Driver 18 默认强制校验证书，自建实例普遍是
+		// 自签名证书。默认 1 保持既有行为（本迁移之前连接参数固定信任），老数据源
+		// 升级后不会因为新增校验而突然连不上；需要严格校验的部署再逐条改回 0。
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE sources ADD COLUMN trust_server_certificate INTEGER NOT NULL DEFAULT 1`); err != nil {
+			return fmt.Errorf("执行迁移 10: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(10,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
 	if version > currentMigrationVersion {
 		return fmt.Errorf("元数据库版本 %d 高于当前程序支持版本", version)
 	}
@@ -227,7 +238,7 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 // currentMigrationVersion 是程序支持的最新元数据版本；新增迁移时同步递增。
-const currentMigrationVersion = 9
+const currentMigrationVersion = 10
 
 const schemaV1 = `
 CREATE TABLE users (

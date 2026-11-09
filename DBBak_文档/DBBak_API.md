@@ -29,7 +29,7 @@ curl -b cookies.txt http://127.0.0.1:8080/api/v1/jobs
 | GET `/api/v1/overview` | 持久化统计与最近运行 | 200 |
 | GET `/api/v1/capabilities` | 本机工具与未实现能力矩阵 | 200 |
 | GET `/api/v1/settings` | 非敏感运行配置和密钥路径 | 200 |
-| GET/POST `/api/v1/sources` | MySQL/PostgreSQL/SQL Server 数据源 | 200/201 |
+| GET/POST `/api/v1/sources` | MySQL/PostgreSQL/SQL Server 数据源。SQL Server 支持 `trust_server_certificate`（默认 false，为 true 时 sqlcmd 带 `-C` 跳过证书链校验） | 200/201 |
 | PATCH `/api/v1/sources/{id}` | 编辑数据源，需 revision | 200 |
 | POST `/api/v1/sources/{id}/probe` | 真实连接与版本检测；可选 `?route=physical` 单独验证 MySQL 物理路线前提（执行器能否看到 `datadir`、XtraBackup 与 MySQL 主版本是否对齐、`log_bin` 状态） | 200/422 |
 | GET/POST `/api/v1/storage-targets` | 存储位置列表/新增。`kind` 取 `local`（执行器本地目录）、`unc`（共享目录 SMB，`root` 填 `\\host\share\path`，路径语义与本地一致）、`ftp`（`host`/`port`/`username`/`password`/`root` 为远程绝对路径）。创建时执行真实写检查：本地/共享落盘探测，FTP 走「上传-回读-删除」探测 | 200/201 |
@@ -75,7 +75,9 @@ curl -b cookies.txt http://127.0.0.1:8080/api/v1/jobs
 
 编辑时 `password` 可省略以保留原凭据，`revision` 必填。列表和响应不包含密码或密文。`engine` 当前支持 `mysql` 与 `postgresql`，已有数据源不能修改引擎。数据库名或维护库名允许字母、数字、下划线、`$` 和连字符，最长 64 字符。PostgreSQL 的 `database` 是连接维护库（通常为 postgres），备份范围为整个实例。
 
-连接检测真实执行 mysql 或 psql，分别返回 TOOL_MISSING、NETWORK_ERROR、AUTH_FAILED、DATABASE_NOT_FOUND、PREREQUISITE_MISSING 等错误，不会把 TCP 连通当作备份可用。PostgreSQL 还检查 REPLICATION/超级用户权限和 max_wal_senders，返回 backup_type=physical_cluster_full。
+SQL Server 数据源额外支持 `trust_server_certificate`（布尔，默认 `false`）。为 `true` 时 sqlcmd 追加 `-C`，跳过 TLS 证书链校验，仍保留加密通道——自建实例普遍使用自签名证书，ODBC Driver 18 默认强制校验，此时不勾选会返回 `TLS_VERIFY_FAILED`。该字段对 `mysql`/`postgresql` 无意义，提交也会被强制落为 `false`。库中已有数据源由迁移 10 回填为 `1`（保持升级前行为），需要严格校验的部署应逐条改回。
+
+连接检测真实执行 mysql 或 psql，分别返回 TOOL_MISSING、NETWORK_ERROR、AUTH_FAILED、DATABASE_NOT_FOUND、PREREQUISITE_MISSING 等错误，不会把 TCP 连通当作备份可用。SQL Server 连接另有 TLS_VERIFY_FAILED（证书不受信）。PostgreSQL 还检查 REPLICATION/超级用户权限和 max_wal_senders，返回 backup_type=physical_cluster_full。
 
 ## 任务与调度
 

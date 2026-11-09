@@ -33,6 +33,34 @@ func TestSQLServerConnectionModes(t *testing.T) {
 	}
 }
 
+// ODBC Driver 18 默认 Encrypt=yes，自签名证书必须靠 -C 才能连上；是否信任由数据源
+// 决定，回归测试同时防止「该带不带」和「不该带给带上」两种错误。
+func TestSQLServerConnectionCertificateTrust(t *testing.T) {
+	client := SQLServerClient{}
+	hasC := func(args []string) bool {
+		for _, arg := range args {
+			if arg == "-C" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, source := range []metadata.Source{
+		{Host: "localhost", Port: 1433, Username: "integrated", TrustServerCertificate: true},
+		{Host: "db.example", Port: 1433, Username: "dbbak_test", TrustServerCertificate: true},
+		{Host: `localhost\MSSQLSERVER`, TrustServerCertificate: true},
+	} {
+		if !hasC(client.connectionArgs(source)) {
+			t.Fatalf("勾选信任时 %s 的连接参数缺少 -C", source.Host)
+		}
+	}
+	// 未勾选必须严格校验证书：云上实例配了受信证书，不应被静默降级。
+	untrusted := client.connectionArgs(metadata.Source{Host: "db.example", Port: 1433, Username: "dbbak_test"})
+	if hasC(untrusted) {
+		t.Fatalf("未勾选信任时不应带 -C: %v", untrusted)
+	}
+}
+
 // msdb.dbo.backupset 没有 backup_lsn 列；回归测试防止再次写出无效查询。
 func TestSQLServerBackupMetadataQueryUsesRealColumns(t *testing.T) {
 	query := backupMetadataQuery("dbbak_test_source", "full")

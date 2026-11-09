@@ -26,7 +26,10 @@ type sourceInput struct {
 	Database string  `json:"database"`
 	Username string  `json:"username"`
 	Password *string `json:"password"`
-	Revision int64   `json:"revision"`
+	// TrustServerCertificate 只有 SQL Server 使用；其他引擎提交该字段会被忽略，
+	// 避免把无关的布尔值带到别的适配器上造成误解。
+	TrustServerCertificate bool  `json:"trust_server_certificate"`
+	Revision               int64 `json:"revision"`
 }
 
 func (s *Server) listSources(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +60,7 @@ func (s *Server) createSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	source := metadata.Source{ID: metadata.NewID("src"), Name: strings.TrimSpace(input.Name), Engine: input.Engine, Host: strings.TrimSpace(input.Host), Port: input.Port, Database: input.Database, Username: strings.TrimSpace(input.Username), SecretRef: metadata.NewID("sec"), Revision: 1, CreatedAt: now, UpdatedAt: now}
+	source := metadata.Source{ID: metadata.NewID("src"), Name: strings.TrimSpace(input.Name), Engine: input.Engine, Host: strings.TrimSpace(input.Host), Port: input.Port, Database: input.Database, Username: strings.TrimSpace(input.Username), TrustServerCertificate: input.Engine == "sqlserver" && input.TrustServerCertificate, SecretRef: metadata.NewID("sec"), Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if err = s.store.CreateSource(r.Context(), source, ciphertext); err != nil {
 		s.internalError(w, r, err)
 		return
@@ -93,6 +96,7 @@ func (s *Server) updateSource(w http.ResponseWriter, r *http.Request) {
 	source.Port = input.Port
 	source.Database = input.Database
 	source.Username = strings.TrimSpace(input.Username)
+	source.TrustServerCertificate = input.Engine == "sqlserver" && input.TrustServerCertificate
 	source.UpdatedAt = time.Now().UTC()
 	var ciphertext string
 	if input.Password != nil {

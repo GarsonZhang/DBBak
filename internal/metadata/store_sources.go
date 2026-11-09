@@ -19,8 +19,8 @@ func (s *Store) CreateSource(ctx context.Context, source Source, ciphertext stri
 	if _, err = tx.ExecContext(ctx, `INSERT INTO secrets(id,ciphertext,created_at) VALUES(?,?,?)`, source.SecretRef, ciphertext, formatTime(time.Now())); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO sources(id,name,engine,host,port,database_name,username,secret_ref,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		source.ID, source.Name, source.Engine, source.Host, source.Port, source.Database, source.Username, source.SecretRef, source.Revision, formatTime(source.CreatedAt), formatTime(source.UpdatedAt))
+	_, err = tx.ExecContext(ctx, `INSERT INTO sources(id,name,engine,host,port,database_name,username,trust_server_certificate,secret_ref,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		source.ID, source.Name, source.Engine, source.Host, source.Port, source.Database, source.Username, boolToInt(source.TrustServerCertificate), source.SecretRef, source.Revision, formatTime(source.CreatedAt), formatTime(source.UpdatedAt))
 	if err != nil {
 		return err
 	}
@@ -39,8 +39,8 @@ func (s *Store) UpdateSource(ctx context.Context, source Source, ciphertext stri
 			return err
 		}
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE sources SET name=?,host=?,port=?,database_name=?,username=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
-		source.Name, source.Host, source.Port, source.Database, source.Username, formatTime(source.UpdatedAt), source.ID, source.Revision)
+	result, err := tx.ExecContext(ctx, `UPDATE sources SET name=?,host=?,port=?,database_name=?,username=?,trust_server_certificate=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
+		source.Name, source.Host, source.Port, source.Database, source.Username, boolToInt(source.TrustServerCertificate), formatTime(source.UpdatedAt), source.ID, source.Revision)
 	if err != nil {
 		return err
 	}
@@ -50,9 +50,12 @@ func (s *Store) UpdateSource(ctx context.Context, source Source, ciphertext stri
 	return tx.Commit()
 }
 
+// sourceColumns 统一列出扫描字段顺序，避免各查询与 scanSource 错位。
+const sourceColumns = `id,name,engine,host,port,database_name,username,trust_server_certificate,secret_ref,revision,created_at,updated_at`
+
 // ListSources 返回不包含密文的数据源列表。
 func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,engine,host,port,database_name,username,secret_ref,revision,created_at,updated_at FROM sources ORDER BY created_at`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+sourceColumns+` FROM sources ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +73,7 @@ func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
 
 // GetSource 按 ID 获取数据源。
 func (s *Store) GetSource(ctx context.Context, id string) (Source, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,name,engine,host,port,database_name,username,secret_ref,revision,created_at,updated_at FROM sources WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+sourceColumns+` FROM sources WHERE id=?`, id)
 	source, err := scanSource(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Source{}, ErrNotFound
@@ -92,11 +95,12 @@ type rowScanner interface{ Scan(dest ...any) error }
 
 func scanSource(row rowScanner) (Source, error) {
 	var source Source
-	var created, updated string
-	err := row.Scan(&source.ID, &source.Name, &source.Engine, &source.Host, &source.Port, &source.Database, &source.Username, &source.SecretRef, &source.Revision, &created, &updated)
+	var trust, created, updated string
+	err := row.Scan(&source.ID, &source.Name, &source.Engine, &source.Host, &source.Port, &source.Database, &source.Username, &trust, &source.SecretRef, &source.Revision, &created, &updated)
 	if err != nil {
 		return Source{}, err
 	}
+	source.TrustServerCertificate = trust == "1" || trust == "true"
 	if source.CreatedAt, err = parseTime(created); err != nil {
 		return Source{}, fmt.Errorf("解析数据源创建时间: %w", err)
 	}
