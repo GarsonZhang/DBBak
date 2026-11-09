@@ -1,5 +1,11 @@
 # 阶段五生产镜像示例；应用与基础镜像均使用明确版本，不使用 latest。
 FROM golang:1.27.3-bookworm AS build
+# 构建阶段默认使用国内模块代理：容器内没有宿主机的 GOPROXY 配置，
+# 直连 proxy.golang.org 在国内网络会 dial tcp 超时导致 go mod download 失败。
+# 不追加 direct：镜像缺失模块时立即报错，避免回退到 VCS 拉取再超时。
+# 需要走企业私服或官方源时用 --build-arg GOPROXY=... 覆盖。
+ARG GOPROXY=https://goproxy.cn
+ENV GOPROXY=${GOPROXY}
 # 只复制构建所需内容，避免把文档、测试数据和工具链带进镜像层。
 WORKDIR /build
 COPY go.mod go.sum ./

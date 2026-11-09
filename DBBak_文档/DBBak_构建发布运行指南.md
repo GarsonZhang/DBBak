@@ -103,6 +103,7 @@ dist/<version>/<goos>_<arch>/SHA256SUMS
 | `go: cannot find main module` | 在子目录执行 | 回到仓库根，`go.mod` 在根目录 |
 | `pattern web/index.html: no matching files` | `web/` 被移动或改名 | 目录必须与 `embed.go` 同级 |
 | `go: download ... x509` / 超时 | 模块代理不可达 | 设 `GOPROXY=https://goproxy.cn,direct` |
+| `docker build` 中 `go mod download` 超时（`dial tcp 142.250.x.x:443: i/o timeout`） | 构建容器默认走 `proxy.golang.org`，国内网络不可达 | Dockerfile 已内置 `ARG GOPROXY`（默认 `https://goproxy.cn`）；需换源时用 `--build-arg GOPROXY=...` |
 | `go: toolchain not available` | 本机 Go 版本过低 | 安装 1.27.3，或让 `GOTOOLCHAIN` 自动下载 |
 | Windows 下 `Access is denied` 覆盖 `dbbak.exe` | 旧进程仍在运行 | 先停止服务，再构建 |
 
@@ -496,6 +497,15 @@ sudo ./deploy/linux/uninstall.sh --yes
 ```bash
 docker build -f deploy/docker/Dockerfile -t dbbak:0.2.0-phase2 .
 ```
+
+`build` 阶段的 `GOPROXY` 默认是 `https://goproxy.cn`（不带 `direct` 回退：镜像缺失模块时立即失败，不退回 VCS 拉取），不依赖宿主机的 Go 环境配置。若网络直连官方源或使用企业 Go 私服：
+
+```bash
+docker build --build-arg GOPROXY=https://proxy.golang.org,direct \
+  -f deploy/docker/Dockerfile -t dbbak:0.2.0-phase2 .
+```
+
+模块代理仍不可达时，先确认构建容器能否出网。`docker build --network host` 只共用宿主网络命名空间，代理地址本身不通时无效；这种情况应改为配置可达的 `GOPROXY`，而不是关闭校验。
 
 ### 7.3 Compose 启动
 
