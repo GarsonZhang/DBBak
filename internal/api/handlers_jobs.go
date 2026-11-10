@@ -189,7 +189,9 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 			return job, fmt.Errorf("数据库服务器本地备份当前只支持 SQL Server 原生备份")
 		}
 		if input.StorageRoot != "" || job.TargetID != "" {
-			return job, fmt.Errorf("数据库服务器本地备份不使用存储位置，请清除存储目录或改回存储位置类型")
+			// 用户切到服务器本地模式后，界面上已看不到存储目录输入框，只提示“请清除”
+			// 会让人无从下手；这里必须说明可执行的动作。
+			return job, fmt.Errorf("数据库服务器本地备份不使用存储位置，但请求里仍带着存储目录 %q；请取消本次编辑后重新打开任务，或改回「存储位置」类型", input.StorageRoot)
 		}
 		if filepath.VolumeName(job.ServerDir) == "" || !filepath.IsAbs(job.ServerDir) {
 			return job, fmt.Errorf("服务器目录必须是数据库服务器上的本地绝对路径（如 D:\\bak）")

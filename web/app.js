@@ -216,6 +216,11 @@
     serverField.style.display=serverMode?'':'none';
     form.elements.storage_root.required=!serverMode;
     form.elements.server_dir.required=serverMode;
+    // 隐藏不等于清空：切到数据库服务器本地后，之前填过的存储目录仍会随表单提交，
+    // 后端据此判定「两种落点混用」并拒绝保存，而用户在界面上已看不到该字段、
+    // 无法自行清除。所以切走时必须显式清空，反之亦然。
+    if(serverMode)form.elements.storage_root.value='';
+    else form.elements.server_dir.value='';
     // 子目录只对存储位置有意义：数据库服务器本地目录是实例上的绝对路径，不存在二级子目录。
     const subField=form.elements.subdir?.closest('label');
     if(subField)subField.style.display=serverMode?'none':'';
