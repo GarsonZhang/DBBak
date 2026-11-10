@@ -150,7 +150,7 @@
         <section class="form-section" id="compression-section">
           <div class="form-section-title"><span class="number">04</span>备份压缩</div>
           <div class="form-grid">
-            <label class="field field-full"><span class="field-label">压缩方式</span><select name="backup_compression" id="backup-compression"></select></label>
+            <label class="field field-full"><span class="field-label">压缩方式</span><select name="backup_compression" id="backup-compression">${compressionOptionsHTML(c.backup_compression||'',state.compression[c.source_id||'']?.capabilities)}</select></label>
             <div class="route-note is-warn" id="compression-note"></div>
           </div>
         </section>
@@ -173,7 +173,9 @@
         </section>
       </form>`,
       `<button class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" form="task-form">保存任务</button>`);
-    updateScheduleFields();updateBackupTypes();updateLocationFields();loadCompressionCapability();
+    // 渲染时已按缓存能力校正过初值（见 compressionOptionsHTML），这里只需补齐引擎可见性并触发探测。
+    const initialCompression=c.backup_compression||'';
+    updateScheduleFields();updateBackupTypes();updateLocationFields();loadCompressionCapability(initialCompression);
   }
   // 路线决定备份语义，说明随选择切换，避免把前提条件堆在弹窗标题里。
   function routeStatus(engine,route){
@@ -273,8 +275,22 @@
     +'<strong>ZSTD 备份只能在 SQL Server 2025（17.x）及以上实例还原</strong>，恢复到旧实例会失败；'
     +'实例升级或迁移前请先确认备份文件的算法（执行记录里会记录实际使用的压缩方式）。'
     +'文件校验通过不等于已验证可恢复，恢复验证需要单独执行。';
-  // 按当前数据源查询可用压缩档；未返回前先全部禁用，避免用户选到一个尚未确认的选项。
-  async function loadCompressionCapability(){
+  function compressionOptionsHTML(current,caps){
+    // 保存过的值必须在这里写进 selected，否则弹窗先渲染一次、能力探测返回前
+    // select 会回落到第一项「不指定」，用户看到的就不是已保存的配置。
+    // 能力已缓存时同步校正：已保存值不可用就直接显示回退结果，避免闪一下不可用值。
+    if(caps&&current&&caps[current]?.status!=='supported')current='';
+    // 能力未知时按全部可用渲染：用户在探测返回前可能已经手动选过，禁用会造成
+    // 「明明能选却被禁用」的困惑；探测返回后由 renderCompression 再按真实能力校正。
+    return Object.entries(compressionLabels).map(([value,label])=>{
+      const cap=caps?.[value];
+      const enabled=!caps||cap?.status==='supported';
+      const suffix=caps&&!enabled?`（${cap?.status==='unsupported'?'不支持':'无法确认'}：${cap?.reason||'原因未知'}）`:'';
+      return `<option value="${value}" ${enabled?'':'disabled'} ${value===current?'selected':''}>${esc(label)}${esc(suffix)}</option>`;
+    }).join('');
+  }
+  // 按当前数据源查询可用压缩档。
+  async function loadCompressionCapability(saved){
     const form=$('#task-form');if(!form)return;
     const sourceID=form.elements.source_id?.value;
     const section=form.querySelector('#compression-section');
@@ -285,9 +301,9 @@
     // 只有 SQL Server 原生 BACKUP 有压缩子句；其他引擎隐藏整段，而不是显示一个无意义的选项。
     if(src?.engine!=='sqlserver'){section.style.display='none';if(select)select.value='';return;}
     section.style.display='';
-    if(!sourceID){renderCompression({},null,note);return;}
+    if(!sourceID){renderCompression({},saved||select.value||'',note);return;}
     if(!state.compression[sourceID]){
-      renderCompression(null,null,note);
+      renderCompression(null,saved||select.value||'',note);
       try{
         state.compression[sourceID]=await api(`/api/v1/sources/${encodeURIComponent(sourceID)}/compression`);
       }catch(error){
@@ -298,15 +314,20 @@
     }
     // 请求返回时用户可能已经切换数据源：只有仍是同一数据源才更新界面。
     if($('#task-form')?.elements.source_id?.value!==sourceID)return;
-    renderCompression(state.compression[sourceID],select.value,note);
+    // 优先用任务里保存的值，而不是 select.value：探测返回前用户没有机会改动它，
+    // 但重新渲染可能已经把选项列表替换掉了。
+    renderCompression(state.compression[sourceID],saved||select.value||'',note);
   }
   function renderCompression(result,current,note){
     const form=$('#task-form');if(!form)return;
     const select=form.elements.backup_compression;if(!select)return;
     if(!result){
-      // 加载中：保留已选值，但全部禁用，避免提交一个未经确认的选项。
+      // 加载中：选项重建后必须把待选值写回去。innerHTML 一换，浏览器只会选中
+      // 带 selected 属性的项，不写回去就会静默回落到第一项「不指定」——
+      // 用户看到的「保存后又变回不指定」正是这条路径。
       const keep=current||select.value||'';
-      select.innerHTML=Object.entries(compressionLabels).map(([v,l])=>`<option value="${v}" ${v===keep?'selected':''}>${esc(l)}</option>`).join('');
+      select.innerHTML=Object.entries(compressionLabels).map(([v,l])=>`<option value="${v}">${esc(l)}</option>`).join('');
+      select.value=keep;
       select.disabled=true;
       note.className='route-note';
       note.innerHTML=`${ico('info',15)}<div>正在读取实例版本与许可，确认可用的压缩方式…</div>`;
@@ -314,30 +335,33 @@
     }
     if(result.error||!result.supported){
       // 数据源不是 SQL Server 时整段已隐藏；到这里说明探测本身失败。
+      // 选项全部禁用但保留原值，避免把已保存的配置在界面上悄悄改成「不指定」。
       select.disabled=true;
+      select.value=current||select.value||'';
       note.className='route-note is-warn';
-      note.innerHTML=`${ico('info',15)}<div><strong>无法确认压缩能力，已禁用压缩选项</strong>${esc(result.error||'数据源未返回压缩能力')}。备份将不写压缩子句，沿用实例默认。仍然可以保存任务。</div>`;
+      note.innerHTML=`${ico('info',15)}<div><strong>无法确认压缩能力，已禁用压缩选项</strong>${esc(result.error||'数据源未返回压缩能力')}。已保存的选项保持原样，不会被改动。</div>`;
       return;
     }
     const caps=result.capabilities||{};
-    const options=Object.entries(compressionLabels).map(([value,label])=>{
+    select.innerHTML=Object.entries(compressionLabels).map(([value,label])=>{
       const cap=caps[value]||{status:'unverified',reason:'实例未返回该选项能力'};
       const enabled=cap.status==='supported';
       const suffix=enabled?'':`（${cap.status==='unsupported'?'不支持':'无法确认'}：${cap.reason||'原因未知'}）`;
-      return `<option value="${value}" ${enabled?'':'disabled'} ${value===current?'selected':''}>${esc(label)}${esc(suffix)}</option>`;
-    });
-    select.innerHTML=options.join('');
+      return `<option value="${value}" ${enabled?'':'disabled'}>${esc(label)}${esc(suffix)}</option>`;
+    }).join('');
     // 保存过的值如果已经不可用（例如实例被换成了 Express），必须显式回退并告诉用户，
     // 否则表单会在用户不知情时把压缩悄悄取消。
-    let selected=current||'';
+    let selected=current||select.value||'';
     if(selected&&caps[selected]?.status!=='supported')selected='';
     select.value=selected;
     select.disabled=false;
     const active=caps[select.value]||caps['']||{};
     const changed=current&&current!==select.value;
+    // 加载中与可用两端都走这里，所以「当前选中项 + 注意事项」只维护一份文案。
+    const noteText=select.value;
     note.className='route-note is-warn';
     note.innerHTML=`${ico('info',15)}<div>${changed?`<strong>原压缩方式「${esc(compressionLabels[current]||current)}」在当前实例不可用，已回退为不指定</strong>`:''}`
-      +`${compressionNotes[select.value]||''}<div class="compression-caveats">${compressionCaveats}</div>`
+      +`${compressionNotes[noteText]||''}<div class="compression-caveats">${compressionCaveats}</div>`
       +(active.status==='supported'?`<div class="compression-default">实例当前默认：${esc(defaultLabel(result))}</div>`:'')
       +`</div>`;
   }
