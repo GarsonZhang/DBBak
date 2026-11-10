@@ -20,6 +20,10 @@ services:
       # 未设置时容器照常启动，但无法登录，需要另外执行 init-admin。
       DBBAK_ADMIN_USERNAME: ${DBBAK_ADMIN_USERNAME:-admin}
       DBBAK_ADMIN_PASSWORD: ${DBBAK_ADMIN_PASSWORD:-}
+      # 放开 SQL Server 原生备份路线的任务创建门控。默认关闭是刻意的：该组合
+      # （Linux 容器内的 sqlcmd18）尚未完成真实备份与异名恢复验收，开启后创建的
+      # 任务只是「允许建」，不代表已验证可用。开启前先确认数据源的连接测试能通过。
+      DBBAK_SQLSERVER_ENABLED: "1"
     ports:
       - "18110:8080"
     volumes:
