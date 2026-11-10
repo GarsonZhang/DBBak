@@ -4,7 +4,7 @@
 
 ## 认证与请求约束
 
-管理员通过 `dbbak init-admin` 创建，无默认账号或默认密码。登录成功后服务设置 HttpOnly、SameSite=Strict 会话 Cookie。所有需要认证的接口支持 Cookie；也支持 `Authorization: Bearer <会话令牌>`。
+管理员通过 `dbbak init-admin` 创建，或在容器化部署时由 `serve` 在 `users` 表为空且设置了 `DBBAK_ADMIN_PASSWORD` 的首次启动中自动创建；无默认账号或默认密码。登录成功后服务设置 HttpOnly、SameSite=Strict 会话 Cookie。所有需要认证的接口支持 Cookie；也支持 `Authorization: Bearer <会话令牌>`。
 
 Cookie 会话的写请求必须带 `X-DBBak-Request: 1`，否则返回 403。前端不得把数据库密码或主密钥写入 localStorage。
 

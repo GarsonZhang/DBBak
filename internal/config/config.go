@@ -36,6 +36,13 @@ type Config struct {
 	// MySQLPhysicalEnabled 同理：XtraBackup 物理路线需要同机执行器与版本对齐，
 	// 未在目标环境真实验收前不得默认开放，避免用户创建必然失败的任务。
 	MySQLPhysicalEnabled bool
+	// BootstrapAdminUser 与 BootstrapAdminPassword 用于容器化部署的首次启动自动建号。
+	//
+	// 只在元数据库里还没有任何用户时生效；已有账号时这两个值完全被忽略，
+	// 因此把密码长期留在 compose 环境变量里不会导致「重启即重置密码」。
+	// 密码来自 DBBAK_ADMIN_PASSWORD，与 init-admin 共用同一变量名。
+	BootstrapAdminUser     string
+	BootstrapAdminPassword string
 }
 
 // Load 从环境变量读取配置，不生成或返回任何数据库凭据。
@@ -85,6 +92,10 @@ func Load() (Config, error) {
 	}
 	cfg.SQLServerEnabled = env("DBBAK_SQLSERVER_ENABLED", "") == "1" || strings.EqualFold(env("DBBAK_SQLSERVER_ENABLED", ""), "true")
 	cfg.MySQLPhysicalEnabled = env("DBBAK_MYSQL_PHYSICAL_ENABLED", "") == "1" || strings.EqualFold(env("DBBAK_MYSQL_PHYSICAL_ENABLED", ""), "true")
+	// 只读取不校验：密码长度、bcrypt 上限等规则留在 security 包，避免两处各写一份。
+	// 空值表示不启用自动建号，serve 启动时不会碰 users 表。
+	cfg.BootstrapAdminUser = strings.TrimSpace(env("DBBAK_ADMIN_USERNAME", "admin"))
+	cfg.BootstrapAdminPassword = os.Getenv("DBBAK_ADMIN_PASSWORD")
 	return cfg, nil
 }
 

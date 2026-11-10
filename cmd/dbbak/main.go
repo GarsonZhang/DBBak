@@ -128,6 +128,18 @@ func ensureInitialAdmin(ctx context.Context, cfg config.Config, username, passwo
 		return false, err
 	}
 	defer store.Close()
+	return ensureAdminIn(ctx, store, username, password)
+}
+
+// ensureAdminIn 在已有元数据库连接上完成“仅当无用户时建号”，供启动流程复用。
+//
+// 独立出来的原因是 serve 已经打开连接，不应为了建号再开关一次 SQLite。
+// 已有用户时返回 (false, nil)，调用方据此区分「已存在」和「创建失败」。
+//
+// 并发安全：两个实例可能同时看到「无用户」并各自建号，此时后来者会撞上
+// users.username 唯一约束。这不代表失败——另一个实例已经建好了同一个账号，
+// 所以冲突后重新确认一次，确认已有用户即按「已存在」返回，避免进程无谓退出。
+func ensureAdminIn(ctx context.Context, store *metadata.Store, username, password string) (bool, error) {
 	exists, err := store.HasUsers(ctx)
 	if err != nil {
 		return false, err
@@ -140,6 +152,9 @@ func ensureInitialAdmin(ctx context.Context, cfg config.Config, username, passwo
 		return false, err
 	}
 	if _, err = store.CreateUser(ctx, username, hash); err != nil {
+		if exists, checkErr := store.HasUsers(ctx); checkErr == nil && exists {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil

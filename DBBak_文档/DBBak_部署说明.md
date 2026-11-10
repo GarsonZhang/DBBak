@@ -47,7 +47,7 @@ $env:DBBAK_ADMIN_PASSWORD = Read-Host "初始管理员密码"
 Remove-Item Env:\DBBAK_ADMIN_PASSWORD
 ```
 
-已有用户时 `init-admin` 会拒绝覆盖。启动：
+已有用户时 `init-admin` 会拒绝覆盖。也可以让 `serve` 自动建号：`users` 表为空且设置了 `DBBAK_ADMIN_PASSWORD` 时，启动即创建首个管理员，已有用户则忽略该变量（Docker/Compose 部署推荐这种方式，见构建发布运行指南 7.4）。启动：
 
 ```powershell
 $env:DBBAK_BACKUP_ROOT = "D:\dbbak-backups"

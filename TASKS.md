@@ -40,6 +40,7 @@
 - Docker 镜像补装 `sqlcmd`：runtime 阶段从微软 RHEL 9 源装 `msodbcsql18` + `mssql-tools18` 并软链到 `/usr/local/bin/sqlcmd`，`INSTALL_SQLCMD=0` 可跳过；此前镜像只有 MySQL 客户端，SQL Server 连接测试固定报 `TOOL_MISSING`。**镜像未构建、容器未启动（本机无 Docker），该层未验证。**
 - SQL Server 证书信任改为数据源级配置：`sources` 新增 `trust_server_certificate`（迁移 10，默认 1 保持升级前行为），`sourceInput` 接收该字段但仅 `engine=sqlserver` 时落库为 true，`connectionArgs` 据此决定是否追加 `-C`；数据源表单新增「信任服务器证书」勾选框，仅在 SQL Server 类型下显示。`run` 新增 `TLS_VERIFY_FAILED` 错误码，不再把证书失败混为网络错误。新增测试 `TestSQLServerConnectionCertificateTrust`、`TestSourceTrustServerCertificatePersists`、`TestSourceTrustCertificateOnlyForSQLServer`，`go vet ./...` 与 `go test ./...` 通过。**Docker 内 sqlcmd18 的真实连接与备份仍未运行。**
 - 注意：迁移 6 之前的历史库不存在该列，改用 `sourceColumns` 统一列表后所有查询列顺序一致；新增列**只能**写在迁移里，不能同时改 `schemaV1`，否则新库会重复加列（本次已踩到并修正）。
+- `serve` 支持首次启动自动建号：`users` 表为空且设置了 `DBBAK_ADMIN_PASSWORD` 时创建管理员，已有用户则忽略并打日志；密码不合规直接终止启动。`ensureInitialAdmin` 拆出 `ensureAdminIn` 供 `serve` 复用同一连接。新增测试 `TestBootstrapAdmin`（未配置/首次/已有账号不覆盖）与 `TestBootstrapAdminRejectsShortPassword`。`compose.yaml` 示例与构建指南 4.1/4.2/7.4、部署说明、API 文档同步。**未在真实容器内验证（本机无 Docker）。**
 
 ### 手动删除任务与备份对象（2026-11-03）
 

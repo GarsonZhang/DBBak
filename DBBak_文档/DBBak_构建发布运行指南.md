@@ -204,12 +204,15 @@ Windows 下用 `Get-FileHash -Algorithm SHA256` 比对。**没有 Authenticode �
 | `DBBAK_SESSION_TTL` | `12h` | 会话有效期 |
 | `DBBAK_SCHEDULER_INTERVAL` | `2s` | 到期任务扫描间隔 |
 | `DBBAK_BACKUP_TIMEOUT` | `30m` | 单次备份超时 |
-| `DBBAK_ADMIN_USERNAME` | `admin` | 仅 `init-admin` 使用 |
-| `DBBAK_ADMIN_PASSWORD` | 无 | 仅 `init-admin` 使用，至少 6 个字符 |
+| `DBBAK_ADMIN_USERNAME` | `admin` | 初始管理员用户名；`serve` 自动建号与 `init-admin` 共用 |
+| `DBBAK_ADMIN_PASSWORD` | 无 | 初始管理员密码，至少 6 个字符。`serve` 首次启动（`users` 表为空）时自动建号，已有用户则忽略；`init-admin` 也用该变量 |
 
 ### 4.2 首次初始化
 
-`init-admin` 只执行一次，重复执行会因用户已存在而失败。密码只通过环境变量传入，不落盘、不写日志。
+两种方式，都只依赖环境变量传密码，不落盘、不写日志：
+
+- **`serve` 自动建号**（容器化部署推荐）：`users` 表为空且已设置 `DBBAK_ADMIN_PASSWORD` 时，启动即创建首个管理员；已有用户时完全忽略该变量，因此重启不会重置密码。详见 7.4。
+- **`init-admin` 手动初始化**（Windows 服务、systemd、以及给已运行实例补账号）：严格模式，重复执行会因用户已存在而失败。
 
 ```powershell
 $env:DBBAK_DATA_DIR = "D:\dbbak-data"
@@ -547,9 +550,28 @@ docker compose logs -f dbbak
 - `healthcheck` 调 `/health/ready`，`start_period: 15s`。
 - 卷名固定：`dbbak-production-data`、`dbbak-production-backups`、`dbbak-production-master-key`。
 
-### 7.4 容器内初始化管理员
+### 7.4 初始化管理员
 
-初始化必须复用同一组卷，否则会写到另一个空数据库：
+**推荐：首次启动自动建号。** 在 compose 环境里给出 `DBBAK_ADMIN_PASSWORD`，服务启动时会检查 `users` 表：
+
+| 情况 | 行为 |
+| --- | --- |
+| 未设置 `DBBAK_ADMIN_PASSWORD` | 跳过，不碰 `users` 表；容器正常启动但无法登录 |
+| 元数据库无任何用户 | 用该密码建首个管理员（用户名取 `DBBAK_ADMIN_USERNAME`，默认 `admin`），日志打印「已创建初始管理员」 |
+| 已有用户 | 完全忽略，不比较也不覆盖密码；日志打印「管理员已存在，忽略 DBBAK_ADMIN_PASSWORD」 |
+| 密码不合规（少于 6 字符或超过 72 字节） | 启动失败并退出，不会建弱口令账号 |
+
+```bash
+cd deploy/docker
+# 用宿主机环境或 .env 注入，不要写进 compose.yaml 明文
+export DBBAK_ADMIN_PASSWORD='你的密码'
+docker compose up -d
+docker compose logs dbbak | grep 管理员
+```
+
+因为「已有用户就忽略」，这个变量可以长期保留而不会在重启时重置密码。**但密码会以明文存在于容器环境变量中**（`docker inspect` 可见），首次登录后建议从 compose 或 `.env` 中删除。
+
+**备选：手动执行 `init-admin`。** 需要在已运行的部署上补建账号时使用，必须复用同一组卷，否则会写到另一个空数据库：
 
 ```bash
 read -rsp '初始管理员密码: ' DBBAK_ADMIN_PASSWORD; echo
@@ -558,6 +580,8 @@ docker compose -f deploy/docker/compose.yaml run --rm \
   -e DBBAK_ADMIN_PASSWORD dbbak init-admin
 unset DBBAK_ADMIN_PASSWORD
 ```
+
+`init-admin` 是严格模式：已有用户时直接报错退出，不做覆盖。
 
 ### 7.5 路径语义（容易踩）
 

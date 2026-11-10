@@ -78,6 +78,32 @@ func serveFromArgs(args []string) error {
 	return serveWithConfig(ctx, cfg)
 }
 
+// bootstrapAdmin 在元数据库还没有任何用户时，用 DBBAK_ADMIN_PASSWORD 建首个管理员。
+//
+// 存在的理由是 Docker/Compose 场景：镜像的 CMD 只有 serve，用户没有方便的方式再执行
+// 一次 init-admin，导致「容器起来了但登录不了」。行为边界：
+//   - 未设置 DBBAK_ADMIN_PASSWORD：跳过，不写 users 表，与旧版本一致；
+//   - 已有用户：跳过，不比较也不覆盖密码，因此环境变量可以长期保留；
+//   - 密码不满足规则：返回错误并终止启动，而不是建一个弱口令账号。
+//
+// 日志只输出用户名和「已创建/已存在」，绝不输出密码。
+func bootstrapAdmin(ctx context.Context, store *metadata.Store, cfg config.Config) error {
+	if cfg.BootstrapAdminPassword == "" {
+		return nil
+	}
+	created, err := ensureAdminIn(ctx, store, cfg.BootstrapAdminUser, cfg.BootstrapAdminPassword)
+	if err != nil {
+		return fmt.Errorf("按 DBBAK_ADMIN_PASSWORD 初始化管理员失败: %w", err)
+	}
+	if created {
+		log.Printf("已创建初始管理员 %s（来源 DBBAK_ADMIN_PASSWORD）；建议登录后修改密码并从环境变量中移除", cfg.BootstrapAdminUser)
+		return nil
+	}
+	// 已有账号时不做任何处理：这正是「重启不会重置密码」的保证。
+	log.Printf("管理员已存在，忽略 DBBAK_ADMIN_PASSWORD")
+	return nil
+}
+
 // serveWithConfig 在给定 ctx 下运行 HTTP 服务、调度器与本地执行器；ctx 取消即优雅关闭。
 //
 // 前台服务与 Windows 服务共用这一实现，避免两套生命周期在停止语义上分叉。
@@ -93,6 +119,11 @@ func serveWithConfig(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	defer store.Close()
+	// 容器化部署的首次启动：只用环境变量建一次号，之后完全忽略。
+	// 失败必须让进程退出而不是继续启动：没有账号的控制台登录不了，静默成功更糟。
+	if err := bootstrapAdmin(ctx, store, cfg); err != nil {
+		return err
+	}
 	keys, err := security.OpenKeyStore(cfg.MasterKeyPath)
 	if err != nil {
 		return err
