@@ -231,6 +231,18 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if version < 11 {
+		// 备份压缩：空值保持历史行为（不写压缩子句，沿用实例 backup compression default），
+		// 因此升级后既有任务的语句逐字节不变，已验收的 SQL Server 备份结论继续有效。
+		// 取值为单列枚举而非「开关 + 算法」两列：两列会允许「选了算法却没启用压缩」这类
+		// 非法组合，必须在 API、界面和适配器三处各自校验一遍。
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN backup_compression TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("执行迁移 11: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(11,?)`, formatTime(time.Now())); err != nil {
+			return err
+		}
+	}
 	if version > currentMigrationVersion {
 		return fmt.Errorf("元数据库版本 %d 高于当前程序支持版本", version)
 	}
@@ -238,7 +250,7 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 // currentMigrationVersion 是程序支持的最新元数据版本；新增迁移时同步递增。
-const currentMigrationVersion = 10
+const currentMigrationVersion = 11
 
 const schemaV1 = `
 CREATE TABLE users (

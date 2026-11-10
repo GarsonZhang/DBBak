@@ -36,6 +36,7 @@
 - SQL 登录密码只通过 `SQLCMDPASSWORD` 环境变量传递，不在命令行使用 `-P`；默认使用 `-E` 受信任连接。
 - 包含中文的 SQL 使用 UTF-8 文件和 sqlcmd `-f 65001`，不经过 shell 拼接。
 - 只有 `RESTORE VERIFYONLY` 和实际异名恢复均成功，并核对表结构、行数、金额和中文内容后，才输出 passed。
+- 压缩验证通过 `DBBAK_TEST_SQLSERVER_COMPRESSION` 指定（空、`off`、`on`、`zstd_low`、`zstd_medium`、`zstd_high`），未知取值直接失败而不降级。输出中带 `compression` 段，包含请求的选项、`compressed_backup_size`、`backup_size` 和有效压缩比：只有 `compressed_backup_size` 小于 `backup_size` 才能证明压缩真正生效，语句执行成功不能作为证据。
 
 ## 前置条件
 
@@ -48,6 +49,8 @@
 官方依据：
 
 - BACKUP DATABASE、TO DISK、CHECKSUM：https://learn.microsoft.com/en-us/sql/t-sql/statements/backup-transact-sql
+- BACKUP COMPRESSION、ALGORITHM = ZSTD（自 SQL Server 2025 17.x 起）与 LEVEL：同上页面 `<general_WITH_options>` 的 COMPRESSION 小节
+- 备份压缩的版本许可（Express/Web 不支持）：https://learn.microsoft.com/en-us/sql/sql-server/editions-and-components-of-sql-server-2022
 - RESTORE、WITH MOVE 与 REPLACE 风险：https://learn.microsoft.com/en-us/sql/t-sql/statements/restore-statements-transact-sql
 - sqlcmd、SQLCMDPASSWORD、-E/-U/-f：https://learn.microsoft.com/en-us/sql/tools/sqlcmd/sqlcmd-utility
 
@@ -60,6 +63,13 @@ $env:DBBAK_TEST_SQLCMD = "C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\
 $env:DBBAK_TEST_SQLSERVER_SERVER = "localhost\MSSQLSERVER"
 $env:DBBAK_TEST_SQLSERVER_SANDBOX_ROOT = "D:\dbbak-sqlserver-isolated"
 $env:DBBAK_TEST_SQLSERVER_CONFIRM_ISOLATED = "YES"
+python scripts/phase2_sqlserver_verify.py
+```
+
+带压缩的全量验证（SQL Server 2025 上验证 ZSTD，需先确认实例 Edition 带备份压缩许可）：
+
+```powershell
+$env:DBBAK_TEST_SQLSERVER_COMPRESSION = "zstd_medium"
 python scripts/phase2_sqlserver_verify.py
 ```
 

@@ -17,7 +17,10 @@
   const ico = (n,s) => window.icon(n,s);
   const main = $('#main'), modal = $('#modal');
   const pages = {overview:'备份概览',tasks:'备份任务',databases:'数据库',storage:'存储位置',logs:'执行日志',cleanup:'保留与清理',deployment:'部署与执行器',settings:'系统设置'};
-  const state = {user:null,page:location.hash.slice(1) in pages?location.hash.slice(1):'overview',sources:[],targets:[],jobs:[],runs:[],artifacts:[],overview:null,capabilities:null,settings:null,search:'',logFilter:'all',cleanupJobID:'',cleanupPreview:null,loading:false,error:'',removal:null};
+  const state = {user:null,page:location.hash.slice(1) in pages?location.hash.slice(1):'overview',sources:[],targets:[],jobs:[],runs:[],artifacts:[],overview:null,capabilities:null,settings:null,search:'',logFilter:'all',cleanupJobID:'',cleanupPreview:null,loading:false,error:'',removal:null,
+    // compression 缓存压缩能力探测结果，键为数据源 ID。能力取决于实例 Edition 与主版本，
+    // 必须在打开任务表单时实时查询，不能按引擎名写死。
+    compression:{}};
 
   class APIError extends Error { constructor(status,code,message){super(message);this.status=status;this.code=code;} }
   async function api(path,options={}) {
@@ -144,8 +147,15 @@
             <label class="field field-full"><span class="field-label">输出子目录（可选）</span><input name="subdir" maxlength="120" placeholder="例如 mysql-prod 或 华东/mysql-prod" value="${esc(c.subdir||'')}"><span class="hint">相对存储根目录；实际落点为「根目录/子目录/数据库名/年/月/文件」，留空则直接写入根目录。</span></label>
           </div>
         </section>
+        <section class="form-section" id="compression-section">
+          <div class="form-section-title"><span class="number">04</span>备份压缩</div>
+          <div class="form-grid">
+            <label class="field field-full"><span class="field-label">压缩方式</span><select name="backup_compression" id="backup-compression"></select></label>
+            <div class="route-note is-warn" id="compression-note"></div>
+          </div>
+        </section>
         <section class="form-section">
-          <div class="form-section-title"><span class="number">04</span>调度与保留</div>
+          <div class="form-section-title"><span class="number">05</span>调度与保留</div>
           <div class="form-grid">
             <label class="field"><span class="field-label">调度类型</span><select name="schedule_type" id="schedule-type"><option value="daily" ${c.schedule_type==='daily'?'selected':''}>每日</option><option value="weekly" ${c.schedule_type==='weekly'?'selected':''}>每周</option><option value="interval" ${c.schedule_type==='interval'?'selected':''}>分钟间隔</option></select></label>
             <label class="field"><span class="field-label">时区</span><select name="timezone">${timezoneOptions(c.timezone)}</select><span class="hint">执行时间按此时区计算，数据库侧记录始终是 UTC。</span></label>
@@ -163,7 +173,7 @@
         </section>
       </form>`,
       `<button class="btn" data-action="close-modal">取消</button><button class="btn btn-primary" form="task-form">保存任务</button>`);
-    updateScheduleFields();updateBackupTypes();updateLocationFields();
+    updateScheduleFields();updateBackupTypes();updateLocationFields();loadCompressionCapability();
   }
   // 路线决定备份语义，说明随选择切换，避免把前提条件堆在弹窗标题里。
   function routeStatus(engine,route){
@@ -238,6 +248,105 @@
     // 子目录只对存储位置有意义：数据库服务器本地目录是实例上的绝对路径，不存在二级子目录。
     const subField=form.elements.subdir?.closest('label');
     if(subField)subField.style.display=serverMode?'none':'';
+  }
+  // 压缩选项标签与注意事项。注意事项直接写在选项里而不是只放在说明区：
+  // 用户是在下拉框里做出选择，注意事项必须出现在做决定的位置。
+  const compressionLabels={
+    '':'不指定（沿用实例默认）',
+    'off':'不压缩（NO_COMPRESSION）',
+    'on':'启用压缩（默认算法）',
+    'zstd_low':'ZSTD · 低压缩级别',
+    'zstd_medium':'ZSTD · 中压缩级别',
+    'zstd_high':'ZSTD · 高压缩级别'
+  };
+  const compressionNotes={
+    '':'不写压缩子句，压缩行为由实例的 <code>backup compression default</code> 决定。这是最保守的选择：程序不改变数据库既有默认，语句与历史备份完全一致。',
+    'off':'显式写 <code>NO_COMPRESSION</code>，即使实例默认开启压缩也不压缩。文件最大、备份期间 CPU 占用最低，适合 CPU 已经吃紧的实例。',
+    'on':'写 <code>COMPRESSION</code>，算法由实例的 <code>backup compression algorithm</code> 决定（默认 MS_XPRESS）。压缩会占数据库主机 CPU，压缩率取决于数据：已压缩字段（图片、zip 等 varbinary）几乎没有收益。',
+    'zstd_low':'<code>COMPRESSION (ALGORITHM = ZSTD, LEVEL = LOW)</code>：CPU 占用最低的 ZSTD 档，压缩比略优于默认 XPRESS。',
+    'zstd_medium':'<code>COMPRESSION (ALGORITHM = ZSTD, LEVEL = MEDIUM)</code>：压缩比与 CPU 的平衡档，官方示例即此档。',
+    'zstd_high':'<code>COMPRESSION (ALGORITHM = ZSTD, LEVEL = HIGH)</code>：压缩比最高、CPU 占用最大档，适合备份窗口宽松的大库。'
+  };
+  // 所有压缩档共有的注意事项，任何选项都必须能看到。
+  const compressionCaveats='<strong>注意事项</strong>压缩会增加数据库主机的 CPU 消耗，CPU 已是瓶颈时备份窗口可能反而变长。'
+    +'压缩备份与未压缩备份的还原方式完全相同，<code>RESTORE</code> 自动识别格式，差异与日志链不受影响。'
+    +'<strong>ZSTD 备份只能在 SQL Server 2025（17.x）及以上实例还原</strong>，恢复到旧实例会失败；'
+    +'实例升级或迁移前请先确认备份文件的算法（执行记录里会记录实际使用的压缩方式）。'
+    +'文件校验通过不等于已验证可恢复，恢复验证需要单独执行。';
+  // 按当前数据源查询可用压缩档；未返回前先全部禁用，避免用户选到一个尚未确认的选项。
+  async function loadCompressionCapability(){
+    const form=$('#task-form');if(!form)return;
+    const sourceID=form.elements.source_id?.value;
+    const section=form.querySelector('#compression-section');
+    const select=form.elements.backup_compression;
+    const note=form.querySelector('#compression-note');
+    if(!section||!select||!note)return;
+    const src=(state.sources||[]).find(x=>x.id===sourceID);
+    // 只有 SQL Server 原生 BACKUP 有压缩子句；其他引擎隐藏整段，而不是显示一个无意义的选项。
+    if(src?.engine!=='sqlserver'){section.style.display='none';if(select)select.value='';return;}
+    section.style.display='';
+    if(!sourceID){renderCompression({},null,note);return;}
+    if(!state.compression[sourceID]){
+      renderCompression(null,null,note);
+      try{
+        state.compression[sourceID]=await api(`/api/v1/sources/${encodeURIComponent(sourceID)}/compression`);
+      }catch(error){
+        // 探测失败也必须让表单可用：退化为全部不可选，并显示真实原因，
+        // 而不是让用户以为什么都没发生、保存后才发现压缩没生效。
+        state.compression[sourceID]={supported:true,capabilities:{},error:error.message};
+      }
+    }
+    // 请求返回时用户可能已经切换数据源：只有仍是同一数据源才更新界面。
+    if($('#task-form')?.elements.source_id?.value!==sourceID)return;
+    renderCompression(state.compression[sourceID],select.value,note);
+  }
+  function renderCompression(result,current,note){
+    const form=$('#task-form');if(!form)return;
+    const select=form.elements.backup_compression;if(!select)return;
+    if(!result){
+      // 加载中：保留已选值，但全部禁用，避免提交一个未经确认的选项。
+      const keep=current||select.value||'';
+      select.innerHTML=Object.entries(compressionLabels).map(([v,l])=>`<option value="${v}" ${v===keep?'selected':''}>${esc(l)}</option>`).join('');
+      select.disabled=true;
+      note.className='route-note';
+      note.innerHTML=`${ico('info',15)}<div>正在读取实例版本与许可，确认可用的压缩方式…</div>`;
+      return;
+    }
+    if(result.error||!result.supported){
+      // 数据源不是 SQL Server 时整段已隐藏；到这里说明探测本身失败。
+      select.disabled=true;
+      note.className='route-note is-warn';
+      note.innerHTML=`${ico('info',15)}<div><strong>无法确认压缩能力，已禁用压缩选项</strong>${esc(result.error||'数据源未返回压缩能力')}。备份将不写压缩子句，沿用实例默认。仍然可以保存任务。</div>`;
+      return;
+    }
+    const caps=result.capabilities||{};
+    const options=Object.entries(compressionLabels).map(([value,label])=>{
+      const cap=caps[value]||{status:'unverified',reason:'实例未返回该选项能力'};
+      const enabled=cap.status==='supported';
+      const suffix=enabled?'':`（${cap.status==='unsupported'?'不支持':'无法确认'}：${cap.reason||'原因未知'}）`;
+      return `<option value="${value}" ${enabled?'':'disabled'} ${value===current?'selected':''}>${esc(label)}${esc(suffix)}</option>`;
+    });
+    select.innerHTML=options.join('');
+    // 保存过的值如果已经不可用（例如实例被换成了 Express），必须显式回退并告诉用户，
+    // 否则表单会在用户不知情时把压缩悄悄取消。
+    let selected=current||'';
+    if(selected&&caps[selected]?.status!=='supported')selected='';
+    select.value=selected;
+    select.disabled=false;
+    const active=caps[select.value]||caps['']||{};
+    const changed=current&&current!==select.value;
+    note.className='route-note is-warn';
+    note.innerHTML=`${ico('info',15)}<div>${changed?`<strong>原压缩方式「${esc(compressionLabels[current]||current)}」在当前实例不可用，已回退为不指定</strong>`:''}`
+      +`${compressionNotes[select.value]||''}<div class="compression-caveats">${compressionCaveats}</div>`
+      +(active.status==='supported'?`<div class="compression-default">实例当前默认：${esc(defaultLabel(result))}</div>`:'')
+      +`</div>`;
+  }
+  // 实例默认压缩行为；接口未返回时如实说明，不推测。
+  function defaultLabel(result){
+    const value=result?.compression_default;
+    if(value==='1')return '开启压缩（未指定时会压缩）';
+    if(value==='0')return '不压缩（未指定时不压缩）';
+    return '未读取到，以实例配置为准';
   }
   // 证书信任只对 SQL Server 有意义；切到其他引擎时隐藏并清空勾选，避免留下无效配置。
   function updateTrustCertField(form){
@@ -404,7 +513,7 @@
   }
   document.addEventListener('click',event=>{const nav=event.target.closest('[data-nav]');if(nav){event.preventDefault();navigate(nav.dataset.nav);return;}const element=event.target.closest('[data-action]');if(element){event.preventDefault();action(element).catch(error=>toast(error.message,true));}});
   document.addEventListener('input',event=>{if(event.target.id==='task-search'){state.search=event.target.value;$('#job-table').innerHTML=jobTable(filteredJobs());$('.toolbar-end').textContent=`共 ${filteredJobs().length} 个任务`;}});
-  document.addEventListener('change',event=>{if(event.target.id==='schedule-type')updateScheduleFields();if(event.target.name==='source_id'&&event.target.closest('#task-form'))updateBackupTypes();if(event.target.name==='backup_method'&&event.target.closest('#task-form'))updateBackupTypes();if((event.target.name==='source_id'||event.target.name==='location_kind')&&event.target.closest('#task-form'))updateLocationFields();if(event.target.id==='storage-kind'&&event.target.closest('#location-form'))updateStorageFields();if(event.target.name==='engine'&&event.target.closest('#database-form')){const form=event.target.closest('#database-form');form.elements.port.value=event.target.value==='postgresql'?5432:event.target.value==='sqlserver'?1433:3306;updateTrustCertField(form);}if(event.target.id==='cleanup-job'){state.cleanupJobID=event.target.value;state.cleanupPreview=null;render();}});
+  document.addEventListener('change',event=>{if(event.target.id==='schedule-type')updateScheduleFields();if(event.target.name==='source_id'&&event.target.closest('#task-form')){updateBackupTypes();loadCompressionCapability();}if(event.target.name==='backup_method'&&event.target.closest('#task-form'))updateBackupTypes();if(event.target.name==='backup_compression'&&event.target.closest('#task-form'))renderCompression(state.compression[$('#task-form')?.elements.source_id?.value],event.target.value,$('#compression-note'));if((event.target.name==='source_id'||event.target.name==='location_kind')&&event.target.closest('#task-form'))updateLocationFields();if(event.target.id==='storage-kind'&&event.target.closest('#location-form'))updateStorageFields();if(event.target.name==='engine'&&event.target.closest('#database-form')){const form=event.target.closest('#database-form');form.elements.port.value=event.target.value==='postgresql'?5432:event.target.value==='sqlserver'?1433:3306;updateTrustCertField(form);}if(event.target.id==='cleanup-job'){state.cleanupJobID=event.target.value;state.cleanupPreview=null;render();}});
   document.addEventListener('submit',async event=>{const form=event.target;event.preventDefault();if(!['login-form','database-form','location-form','task-form','retention-form'].includes(form.id))return;if(!form.reportValidity())return;const data=new FormData(form),value=n=>String(data.get(n)||'').trim();clearFormError();const submitBtn=form.closest('dialog')?.querySelector(`.modal-footer button[form="${form.id}"]`);if(submitBtn)submitBtn.disabled=true;try{
     if(form.id==='login-form'){const r=await api('/api/v1/auth/login',{method:'POST',body:JSON.stringify({username:value('username'),password:value('password')})});showApp(r.user);await loadAll();return;}
     if(form.id==='database-form'){const id=form.dataset.id,payload={name:value('name'),engine:value('engine'),host:value('host'),port:Number(value('port')),database:value('database'),username:value('username')},trust=form.elements.trust_server_certificate,password=String(data.get('password')||'');if(payload.engine==='sqlserver')payload.trust_server_certificate=!!trust?.checked;if(password||!id)payload.password=password;if(id)payload.revision=Number(form.dataset.revision);await api(id?`/api/v1/sources/${id}`:'/api/v1/sources',{method:id?'PATCH':'POST',body:JSON.stringify(payload)});closeModal();await loadAll({quiet:true});toast('数据源已保存，凭据已加密。');return;}
@@ -424,7 +533,7 @@
       toast(isOSS?'对象存储已通过真实写检查并保存。':'存储目录已通过真实写检查并保存。');
       return;
     }
-    if(form.id==='task-form'){const id=form.dataset.id,payload={name:value('name'),source_id:value('source_id'),location_kind:value('location_kind')||'storage',server_dir:value('server_dir'),storage_root:value('storage_root'),subdir:value('subdir'),timezone:value('timezone')||'Asia/Shanghai',schedule_type:value('schedule_type'),time_of_day:value('time_of_day')||'02:00',weekday:Number(value('weekday')||0),interval_minutes:Number(value('interval_minutes')||15),enabled:data.has('enabled'),retention_days:Number(value('retention_days')),min_full:Number(value('min_full')),auto_cleanup:data.has('auto_cleanup'),backup_type:value('backup_type'),backup_method:value('backup_method')};if(id)payload.revision=Number(form.dataset.revision);await api(id?`/api/v1/jobs/${id}`:'/api/v1/jobs',{method:id?'PATCH':'POST',body:JSON.stringify(payload)});closeModal();await loadAll({quiet:true});toast('任务配置与下次执行时间已持久化。');return;}    if(form.id==='retention-form'){const current=job(state.cleanupJobID),payload={...current,retention_days:Number(value('retention_days')),min_full:Number(value('min_full')),auto_cleanup:current.auto_cleanup};await api(`/api/v1/jobs/${current.id}`,{method:'PATCH',body:JSON.stringify(payload)});state.cleanupPreview=null;await loadAll({quiet:true});toast('保留策略已保存，请重新预览。');}
+    if(form.id==='task-form'){const id=form.dataset.id,payload={name:value('name'),source_id:value('source_id'),location_kind:value('location_kind')||'storage',server_dir:value('server_dir'),storage_root:value('storage_root'),subdir:value('subdir'),timezone:value('timezone')||'Asia/Shanghai',schedule_type:value('schedule_type'),time_of_day:value('time_of_day')||'02:00',weekday:Number(value('weekday')||0),interval_minutes:Number(value('interval_minutes')||15),enabled:data.has('enabled'),retention_days:Number(value('retention_days')),min_full:Number(value('min_full')),auto_cleanup:data.has('auto_cleanup'),backup_type:value('backup_type'),backup_method:value('backup_method'),backup_compression:value('backup_compression')};if(id)payload.revision=Number(form.dataset.revision);await api(id?`/api/v1/jobs/${id}`:'/api/v1/jobs',{method:id?'PATCH':'POST',body:JSON.stringify(payload)});closeModal();await loadAll({quiet:true});toast('任务配置与下次执行时间已持久化。');return;}    if(form.id==='retention-form'){const current=job(state.cleanupJobID),payload={...current,retention_days:Number(value('retention_days')),min_full:Number(value('min_full')),auto_cleanup:current.auto_cleanup};await api(`/api/v1/jobs/${current.id}`,{method:'PATCH',body:JSON.stringify(payload)});state.cleanupPreview=null;await loadAll({quiet:true});toast('保留策略已保存，请重新预览。');}
   }catch(error){if(submitBtn)submitBtn.disabled=false;if(form.id==='login-form')$('#login-error').textContent=error.message;else showFormError(error);}});
   window.addEventListener('hashchange',()=>{if(!state.user)return;state.page=location.hash.slice(1) in pages?location.hash.slice(1):'overview';state.cleanupPreview=null;render();});
   // 禁止点击遮罩自动关闭；ESC 默认关闭行为一并拦截，弹窗只能显式关闭。

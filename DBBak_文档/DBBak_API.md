@@ -32,6 +32,7 @@ curl -b cookies.txt http://127.0.0.1:8080/api/v1/jobs
 | GET/POST `/api/v1/sources` | MySQL/PostgreSQL/SQL Server 数据源。SQL Server 支持 `trust_server_certificate`（默认 false，为 true 时 sqlcmd 带 `-C` 跳过证书链校验） | 200/201 |
 | PATCH `/api/v1/sources/{id}` | 编辑数据源，需 revision | 200 |
 | POST `/api/v1/sources/{id}/probe` | 真实连接与版本检测；可选 `?route=physical` 单独验证 MySQL 物理路线前提（执行器能否看到 `datadir`、XtraBackup 与 MySQL 主版本是否对齐、`log_bin` 状态） | 200/422 |
+| GET `/api/v1/sources/{id}/compression` | SQL Server 备份压缩能力：按实例 Edition 与主版本返回 `off`/`on`/`zstd_low`/`zstd_medium`/`zstd_high` 各档的 `status`（`supported`/`unsupported`/`unverified`）与 `reason`，并带 `compression_default`（实例 `backup compression default`）。非 SQL Server 返回 `supported:false` 与空能力集。探测失败返回全部 `unverified`，不返回 5xx | 200 |
 | GET/POST `/api/v1/storage-targets` | 存储位置列表/新增。`kind` 取 `local`（执行器本地目录）、`unc`（共享目录 SMB，`root` 填 `\\host\share\path`，路径语义与本地一致）、`ftp`（`host`/`port`/`username`/`password`/`root` 为远程绝对路径）。创建时执行真实写检查：本地/共享落盘探测，FTP 走「上传-回读-删除」探测 | 200/201 |
 | PATCH `/api/v1/storage-targets/{id}` | 编辑仓库；有备份时禁止改根目录/存储类型。FTP 编辑时 `password` 留空表示沿用原凭据 | 200 |
 | POST `/api/v1/storage-targets/{id}/check` | 真实写检查：本地/共享创建并删除测试文件，FTP 上传-回读-删除 | 200/422 |
@@ -39,8 +40,8 @@ curl -b cookies.txt http://127.0.0.1:8080/api/v1/jobs
 | DELETE `/api/v1/storage-targets/{id}?confirm=<名称>` | 解除存储位置登记；**不删除磁盘文件**；仍被任务或备份对象引用时返回 409 | 200/409/422 |
 | GET `/api/v1/sources/{id}/removal` | 数据源删除预览：任务/对象引用统计与阻塞原因 | 200 |
 | DELETE `/api/v1/sources/{id}?confirm=<名称>` | 删除数据源并**一并清除加密凭据**；不连接、不改动数据库本身；被任务或对象引用时返回 409 | 200/409/422 |
-| GET/POST `/api/v1/jobs` | 任务列表/新增；`backup_type` 取 `full`/`differential`/`log`。`backup_method` 选择 MySQL 备份路线：空为默认（逻辑全量 `mysqldump`）、`logical`、`physical`（Percona XtraBackup，需 `DBBAK_MYSQL_PHYSICAL_ENABLED=1` 且执行器为 Linux）。`log` 仅对 SQL Server 事务日志或 MySQL 物理路线的 binlog 归档可用；`differential` 仅 SQL Server。`subdir` 为任务级输出子目录。`location_kind` 区分备份落点：`storage`（默认，`storage_root`/`target_id` 指向执行器可达目录）或 `database_server`（仅 SQL Server，`server_dir` 为数据库服务器上的本地绝对路径，不使用存储位置；产物标 `uploaded` 未校验，以 msdb LSN 与 backup_size 为凭证，删除/清理只清记录，远程文件需人工删除） | 200/201 |
-| PATCH `/api/v1/jobs/{id}` | 调度、启停、保留配置与 `subdir`，需 revision | 200 |
+| GET/POST `/api/v1/jobs` | 任务列表/新增；`backup_type` 取 `full`/`differential`/`log`。`backup_method` 选择 MySQL 备份路线：空为默认（逻辑全量 `mysqldump`）、`logical`、`physical`（Percona XtraBackup，需 `DBBAK_MYSQL_PHYSICAL_ENABLED=1` 且执行器为 Linux）。`log` 仅对 SQL Server 事务日志或 MySQL 物理路线的 binlog 归档可用；`differential` 仅 SQL Server。`subdir` 为任务级输出子目录。`backup_compression` 仅对 SQL Server 生效，取空（不写压缩子句、沿用实例默认）、`off`（`NO_COMPRESSION`）、`on`（`COMPRESSION`）、`zstd_low`/`zstd_medium`/`zstd_high`（`COMPRESSION (ALGORITHM = ZSTD, LEVEL = …)`，需 SQL Server 2025 及以上）；其他引擎提交该字段会被清空。`location_kind` 区分备份落点：`storage`（默认，`storage_root`/`target_id` 指向执行器可达目录）或 `database_server`（仅 SQL Server，`server_dir` 为数据库服务器上的本地绝对路径，不使用存储位置；产物标 `uploaded` 未校验，以 msdb LSN 与 `compressed_backup_size` 为凭证，删除/清理只清记录，远程文件需人工删除） | 200/201 |
+| PATCH `/api/v1/jobs/{id}` | 调度、启停、保留配置、`subdir` 与 `backup_compression`，需 revision | 200 |
 | GET `/api/v1/jobs/{id}/removal?force=0\|1` | 评估删除任务的范围（配置 + 备份文件 + 运行记录）与阻塞项，只读 | 200 |
 | DELETE `/api/v1/jobs/{id}[?force=1]` | 删除任务：文件逐个删除成功后移除记录；任务必须已暂停 | 200/409/422 |
 | GET `/api/v1/jobs/{id}/artifacts/removal?force=0\|1` | 只评估任务下备份文件的删除范围，只读 | 200 |

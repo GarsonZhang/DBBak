@@ -50,6 +50,28 @@ def settings() -> tuple[Path, Path, Path, Path]:
     return root, backup, restore, work
 
 
+def compression_clause(option: str) -> tuple[str, str]:
+    """把压缩环境变量翻译为 WITH 子句片段与标签。
+
+    空值表示不写压缩子句，保持与本脚本历史行为一致；未知取值直接失败，
+    不做静默降级——静默降级会让「已验证压缩」的结论建立在未压缩备份上。
+    """
+    mapping = {
+        "": ("", "default"),
+        "off": ("NO_COMPRESSION, ", "off"),
+        "on": ("COMPRESSION, ", "on"),
+        "zstd_low": ("COMPRESSION (ALGORITHM = ZSTD, LEVEL = LOW), ", "zstd_low"),
+        "zstd_medium": ("COMPRESSION (ALGORITHM = ZSTD, LEVEL = MEDIUM), ", "zstd_medium"),
+        "zstd_high": ("COMPRESSION (ALGORITHM = ZSTD, LEVEL = HIGH), ", "zstd_high"),
+    }
+    if option not in mapping:
+        fail(
+            "DBBAK_TEST_SQLSERVER_COMPRESSION 只能为空、off、on、"
+            f"zstd_low、zstd_medium、zstd_high，当前为 {option!r}"
+        )
+    return mapping[option]
+
+
 def sqlcmd(work: Path, sql: str, database: str = "master", capture: bool = False) -> str:
     script = work / ("statement-" + str(time.time_ns()) + ".sql")
     # SET NOCOUNT ON 抑制“(N rows affected)”，否则会被当成 FILELISTONLY 的数据行。
@@ -113,12 +135,23 @@ INSERT INTO [{SOURCE_DB}].dbo.sample_records(id,name,amount) VALUES
 GO
 """
     sqlcmd(work, seed)
-    sqlcmd(work, f"BACKUP DATABASE [{SOURCE_DB}] TO DISK = N'{backup_file}' WITH CHECKSUM;")
+    compression = os.environ.get("DBBAK_TEST_SQLSERVER_COMPRESSION", "").strip()
+    compression_sql, compression_label = compression_clause(compression)
+    sqlcmd(work, f"BACKUP DATABASE [{SOURCE_DB}] TO DISK = N'{backup_file}' WITH {compression_sql}CHECKSUM;")
     if not backup_file.is_file():
         fail("BACKUP 返回成功但未在隔离目录找到备份文件；检查 SQL Server 服务账号路径权限")
     digest = hashlib.sha256(backup_file.read_bytes()).hexdigest()
     size = backup_file.stat().st_size
     sqlcmd(work, f"RESTORE VERIFYONLY FROM DISK = N'{backup_file}' WITH CHECKSUM;")
+    # 压缩是否真的生效必须看 msdb 与介质实际大小，不能凭语句执行成功推断：
+    # 语句里的 COMPRESSION 只说明「要求压缩」，实例不支持时会报错，
+    # 但 compressed_backup_size 才能真正证明备份集被压实。
+    compression_evidence = sqlcmd(
+        work,
+        f"SELECT TOP (1) compressed_backup_size, backup_size FROM msdb.dbo.backupset "
+        f"WHERE database_name = N'{SOURCE_DB}' AND type = 'D' ORDER BY backup_set_id DESC;",
+        capture=True,
+    )
 
     listing = sqlcmd(work, f"RESTORE FILELISTONLY FROM DISK = N'{backup_file}';", capture=True)
     files = rows(listing)
@@ -144,11 +177,23 @@ GO
     if normalize(count_sum) != "3|601.25" or normalize(columns) != "4" or names != "隔离验证-A,隔离验证-B,隔离验证-C":
         fail(f"隔离恢复数据不一致: rows={count_sum!r}, columns={columns!r}, names={names!r}")
     version = sqlcmd(work, "SELECT @@VERSION;", capture=True)
+    sizes = rows(compression_evidence)
+    compressed_size = int(sizes[0][0]) if sizes and sizes[0][0].isdigit() else 0
+    logical_size = int(sizes[0][1]) if sizes and len(sizes[0]) > 1 and sizes[0][1].isdigit() else 0
     print(json.dumps({
         "status": "passed", "server_version": version, "backup_method": "sqlserver_native_full",
         "backup_file": str(backup_file), "bytes": size, "sha256": digest,
         "restore_database": restore_db, "restore": {"rows": 3, "amount_sum": "601.25", "columns": 4},
         "replace_used": False, "source_database_unchanged_except_sample": True,
+        # 压缩结论必须带证据：请求的选项、介质实际占用、未压缩的逻辑大小。
+        # 三者一起才能区分「确实压缩了」与「选了压缩但没效果」。
+        "compression": {
+            "requested": compression_label,
+            "compressed_backup_size": compressed_size,
+            "backup_size": logical_size,
+            "file_bytes": size,
+            "effective_ratio": round(logical_size / compressed_size, 3) if compressed_size else None,
+        },
     }, ensure_ascii=False, indent=2))
 
 

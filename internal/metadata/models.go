@@ -71,28 +71,33 @@ type Job struct {
 	// 'database_server'（数据库服务器本地目录，仅 SQL Server 原生备份支持）。
 	LocationKind string `json:"location_kind"`
 	// ServerDir 是 database_server 模式下数据库服务器上的输出目录，如 D:\bak。
-	ServerDir      string     `json:"server_dir"`
+	ServerDir string `json:"server_dir"`
 	// Subdir 是任务在存储根目录下的相对子目录，为不同数据库实例区分子目录；
 	// 空值表示直接写入根目录（历史任务行为）。每次运行冻结其值，已产出的文件位置不受后续修改影响。
-	Subdir          string     `json:"subdir"`
-	Timezone        string     `json:"timezone"`
-	ScheduleType    string     `json:"schedule_type"`
-	TimeOfDay       string     `json:"time_of_day"`
-	Weekday         int        `json:"weekday"`
-	IntervalMinutes int        `json:"interval_minutes"`
-	Enabled         bool       `json:"enabled"`
-	BackupType      string     `json:"backup_type"`
+	Subdir            string     `json:"subdir"`
+	Timezone          string     `json:"timezone"`
+	ScheduleType      string     `json:"schedule_type"`
+	TimeOfDay         string     `json:"time_of_day"`
+	Weekday           int        `json:"weekday"`
+	IntervalMinutes   int        `json:"interval_minutes"`
+	Enabled           bool       `json:"enabled"`
+	BackupType        string     `json:"backup_type"`
 	// BackupMethod 是任务选择的备份路线：空表示沿用引擎默认路线（MySQL 为逻辑全量），
 	// logical 为 mysqldump，physical 为 XtraBackup 物理备份。
 	// 同一引擎的两条路线恢复语义完全不同，必须在任务上固定，不能按运行时环境临时切换。
-	BackupMethod    string     `json:"backup_method"`
-	RetentionDays   int        `json:"retention_days"`
-	MinFull         int        `json:"min_full"`
-	AutoCleanup     bool       `json:"auto_cleanup"`
-	NextRunAt       *time.Time `json:"next_run_at"`
-	Revision        int64      `json:"revision"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	BackupMethod string `json:"backup_method"`
+	// BackupCompression 是 SQL Server 原生备份的压缩选项，空值表示不写压缩子句、
+	// 沿用实例的 backup compression default。取值见内部 backup 包：
+	// '' | off | on | zstd_low | zstd_medium | zstd_high。
+	// 其他引擎忽略该字段：MySQL 与 PostgreSQL 的压缩由工具自身参数控制，语义不同。
+	BackupCompression string     `json:"backup_compression"`
+	RetentionDays     int        `json:"retention_days"`
+	MinFull           int        `json:"min_full"`
+	AutoCleanup       bool       `json:"auto_cleanup"`
+	NextRunAt         *time.Time `json:"next_run_at"`
+	Revision          int64      `json:"revision"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // Run 区分命令、文件和恢复验证状态。

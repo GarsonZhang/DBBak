@@ -36,4 +36,8 @@
 .route-note.is-warn strong{color:#7c5c2c}
 .route-note.is-warn code{background:#f6ebd8;color:#7c5c2c}
 .route-flag{display:inline-block;margin-left:7px;padding:1px 6px;border-radius:4px;background:#f6e7cd;color:#8a6326;font-size:9px;font-weight:600;letter-spacing:.02em;vertical-align:1px}
+/* 压缩注意事项：与选项正文拉开间距并加左侧竖线，让「注意事项」在长段说明里能被一眼找到。 */
+.compression-caveats{margin-top:9px;padding:8px 11px;border-left:2px solid #e5cfa6;background:#fdf8ef;border-radius:0 6px 6px 0;color:#8a7752;line-height:1.75}
+.compression-caveats strong{display:block;margin-bottom:2px;color:#7c5c2c}
+.compression-default{margin-top:7px;color:#9c8a63;font-size:10px}
 @media(max-width:600px){.modal-body .form-grid{grid-template-columns:1fr;gap:15px}.modal-body .choice-row{grid-template-columns:1fr}.modal-body .route-note{padding:10px 12px}}

@@ -57,6 +57,7 @@ func NewServer(store *metadata.Store, keys *security.KeyStore, adapters *backup.
 	mux.HandleFunc("POST /api/v1/sources", s.authenticated(s.createSource))
 	mux.HandleFunc("PATCH /api/v1/sources/{id}", s.authenticated(s.updateSource))
 	mux.HandleFunc("POST /api/v1/sources/{id}/probe", s.authenticated(s.probeSource))
+	mux.HandleFunc("GET /api/v1/sources/{id}/compression", s.authenticated(s.sourceCompressionCapabilities))
 	mux.HandleFunc("GET /api/v1/sources/{id}/removal", s.authenticated(s.previewSourceRemoval))
 	mux.HandleFunc("DELETE /api/v1/sources/{id}", s.authenticated(s.deleteSource))
 	mux.HandleFunc("GET /api/v1/storage-targets", s.authenticated(s.listStorage))

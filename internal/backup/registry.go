@@ -31,6 +31,111 @@ type BackupSpec struct {
 	// （SQL Server 原生 BACKUP）必须用它命名，不能再用执行器临时目录名——
 	// 那个名字是 os.MkdirTemp 生成的随机串，与备份对象毫无关系。
 	FileName string
+	// Compress 是压缩选项，只有 SQL Server 原生 BACKUP 使用，取值见
+	// compressionClauses。空串表示不写压缩子句，保持历史语句逐字节不变：
+	// 既有 SQL Server 备份验收结论都建立在 WITH CHECKSUM 之上，不能因默认值改动而失效。
+	// 其他引擎忽略该字段——它们的压缩由工具自身参数控制，语义与 BACKUP COMPRESSION 不同。
+	Compress string
+}
+
+// 压缩选项取值。用单列枚举而不是「开关 + 算法」两列，是为了让
+// 「选了 ZSTD 却没启用压缩」这类非法组合无法被表达。
+const (
+	CompressionDefault = ""            // 不写压缩子句，沿用实例 backup compression default
+	CompressionOff     = "off"         // NO_COMPRESSION
+	CompressionOn      = "on"          // COMPRESSION，算法随实例 backup compression algorithm
+	CompressionZSTDLow = "zstd_low"    // COMPRESSION (ALGORITHM = ZSTD, LEVEL = LOW)
+	CompressionZSTDMed = "zstd_medium" // COMPRESSION (ALGORITHM = ZSTD, LEVEL = MEDIUM)
+	CompressionZSTDHi  = "zstd_high"   // COMPRESSION (ALGORITHM = ZSTD, LEVEL = HIGH)
+)
+
+// compressionClauses 把压缩选项映射为 BACKUP 的 WITH 子句片段。
+//
+// 返回空串表示不写压缩子句。未知取值返回错误而不是回退到空串：
+// 静默退化成不压缩会让用户以为已经压缩，而备份记录上看不出任何异常。
+func compressionClauses(compress string) (string, error) {
+	switch compress {
+	case CompressionDefault:
+		return "", nil
+	case CompressionOff:
+		return "NO_COMPRESSION", nil
+	case CompressionOn:
+		return "COMPRESSION", nil
+	case CompressionZSTDLow:
+		return "COMPRESSION (ALGORITHM = ZSTD, LEVEL = LOW)", nil
+	case CompressionZSTDMed:
+		return "COMPRESSION (ALGORITHM = ZSTD, LEVEL = MEDIUM)", nil
+	case CompressionZSTDHi:
+		return "COMPRESSION (ALGORITHM = ZSTD, LEVEL = HIGH)", nil
+	default:
+		return "", fmt.Errorf("未知的备份压缩选项 %q", compress)
+	}
+}
+
+// CompressionLabel 返回压缩选项的中文名，供运行日志使用。
+func CompressionLabel(compress string) string {
+	switch compress {
+	case CompressionOff:
+		return "不压缩"
+	case CompressionOn:
+		return "压缩（默认算法）"
+	case CompressionZSTDLow:
+		return "ZSTD 低压缩级别"
+	case CompressionZSTDMed:
+		return "ZSTD 中压缩级别"
+	case CompressionZSTDHi:
+		return "ZSTD 高压缩级别"
+	default:
+		return ""
+	}
+}
+
+// KnownCompression 判断压缩选项是否为已定义取值，供 API 校验任务配置。
+func KnownCompression(compress string) bool {
+	_, err := compressionClauses(compress)
+	return err == nil
+}
+
+// UnverifiedCompressionCapabilities 生成全部为 unverified 的能力集。
+//
+// 探测本身失败时使用：宁可让界面把选项全部禁用并显示原因，
+// 也不能默认放行——那会让用户以为压缩已生效，而备份记录上看不出任何异常。
+func UnverifiedCompressionCapabilities(reason string) map[string]CompressionCapability {
+	result := make(map[string]CompressionCapability, 6)
+	result[CompressionDefault] = CompressionCapability{Status: "supported"}
+	for _, option := range []string{CompressionOff, CompressionOn, CompressionZSTDLow, CompressionZSTDMed, CompressionZSTDHi} {
+		result[option] = CompressionCapability{Status: "unverified", Reason: reason}
+	}
+	return result
+}
+
+// CompressionSupported 由一个引擎的适配器实现，声明当前连接的数据库实例支持哪些压缩选项。
+//
+// 返回值按选项列出「是否可用 + 不可用原因」；未列出的选项视为不支持。
+// 之所以让适配器回答而不是在 API 层按引擎名硬编码，是因为压缩能力取决于
+// 实例版本与许可（Express/Web 无备份压缩许可，ZSTD 需要 2025 及以上），
+// 只有实时连上实例才能判断。
+type CompressionSupported interface {
+	CompressionCapabilities(context.Context, metadata.Source, string) (map[string]CompressionCapability, error)
+}
+
+// CompressionDefaultProvider 由适配器实现，返回实例当前的备份压缩默认值（"1"/"0"）。
+//
+// 界面必须能显示它：选「不指定」时会不会真的压缩，完全取决于这个实例级配置，
+// 不显示就等于让用户在一个结果不可预期的选项上做选择。
+type CompressionDefaultProvider interface {
+	CompressionDefault(context.Context, metadata.Source, string) (string, error)
+}
+
+// CompressionCapability 描述单个压缩选项的可用性。
+//
+// Status 沿用项目的能力四态：supported / unsupported / prerequisite_missing / unverified。
+// 只有 supported 才允许在任务上保存；unverified 表示探测不到结论（如权限不足），
+// 此时界面必须让选项不可选，而不是默认放行。
+type CompressionCapability struct {
+	Status string `json:"status"`
+	// Reason 是给用户看的具体原因，unsupported 与 unverified 时必须非空。
+	Reason string `json:"reason,omitempty"`
 }
 
 // RouteNamer 由同一引擎存在多条备份路线的适配器实现。

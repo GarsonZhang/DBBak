@@ -183,6 +183,11 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		return
 	}
 	r.log(ctx, run.ID, "INFO", "开始 "+source.Engine+" "+backupTypeLabel(backupType)+"备份")
+	if label := CompressionLabel(job.BackupCompression); label != "" {
+		// 压缩会改变产物大小与可还原的实例版本范围，必须写进运行日志，
+		// 否则事后只能靠 msdb 反查，界面上的记录看不出这次备份做了什么。
+		r.log(ctx, run.ID, "INFO", "备份压缩选项："+label)
+	}
 
 	var root string
 	ftpStorage := false
@@ -303,7 +308,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		// 只把服务器目录与模式交给适配器：它据此拼 BACKUP 的 DISK 目标，不触碰执行器文件系统。
 		adapterTarget = metadata.StorageTarget{ID: "", Kind: "database_server", ServerRoot: job.ServerDir}
 	}
-	result, err := adapter.Execute(ctx, source, adapterTarget, password, workPath, BackupSpec{Type: backupType, Base: base, FileName: artifactName})
+	result, err := adapter.Execute(ctx, source, adapterTarget, password, workPath, BackupSpec{Type: backupType, Base: base, FileName: artifactName, Compress: job.BackupCompression})
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, ErrorCode(err), SafeErrorMessage(err))
 		return
@@ -321,14 +326,20 @@ func (r *Runner) execute(parent context.Context, runID string) {
 
 	if result.ProducedPath == "" {
 		// 数据库服务器本地备份：文件不经过执行器，无法哈希校验。
-		// 以 msdb 登记的 backup_size 与 LSN 作为真实性凭证，产物标记为 uploaded（未校验），
+		// 以 msdb 登记的大小与 LSN 作为真实性凭证，产物标记为 uploaded（未校验），
 		// 删除与清理只清记录，远程文件需在数据库服务器上人工处理。
 		var meta map[string]any
 		if jsonErr := json.Unmarshal(result.EngineMetadata, &meta); jsonErr != nil {
 			r.failRun(ctx, &run, &artifact, "METADATA_ERROR", "无法解析备份元数据: "+jsonErr.Error())
 			return
 		}
-		size, _ := meta["backup_size"].(float64)
+		// 优先取介质上实际占用的 compressed_backup_size：启用压缩后 backup_size 仍是
+		// 未压缩的逻辑大小，用它当文件大小会让界面显示和清理预计释放空间虚高。
+		// 老记录或未压缩备份没有该字段时才退回 backup_size。
+		size, _ := meta["compressed_backup_size"].(float64)
+		if size <= 0 {
+			size, _ = meta["backup_size"].(float64)
+		}
 		artifact.RelativePath = ArtifactRelativePath(subdir, source.Database, dateDir+"/"+artifactName+result.Extension)
 		artifact.Size = int64(size)
 		artifact.State = "uploaded"

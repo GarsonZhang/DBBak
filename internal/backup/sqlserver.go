@@ -53,6 +53,159 @@ func (c SQLServerClient) Probe(ctx context.Context, source metadata.Source, pass
 	return strings.TrimSpace(output), nil
 }
 
+// instanceProfileQuery 一次取回判定压缩能力的全部事实。
+//
+// ProductMajorVersion 在 SQL Server 2016 之前不存在，返回 NULL，因此必须同时取
+// ProductVersion 作为回退解析来源；Edition 决定备份压缩许可（Express/Web 不带），
+// backup compression default 只用于向用户显示实例当前默认行为。
+const instanceProfileQuery = `SET NOCOUNT ON; SELECT
+ CAST(SERVERPROPERTY('Edition') AS nvarchar(128)),
+ CAST(SERVERPROPERTY('ProductMajorVersion') AS nvarchar(16)),
+ CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(128)),
+ CAST((SELECT CAST(value_in_use AS nvarchar(16)) FROM sys.configurations WHERE name = 'backup compression default') AS nvarchar(16));`
+
+// instanceProfile 是压缩能力判定的输入事实。
+type instanceProfile struct {
+	Edition      string
+	MajorVersion int
+	ProductVer   string
+	// CompressionDefault 为实例的 backup compression default；读不到时为空。
+	CompressionDefault string
+}
+
+// CompressionCapabilities 按实例版本与许可判定各压缩选项是否可用。
+//
+// 判定必须是实时的：压缩能力取决于 Edition（Express/Web 无备份压缩许可）与
+// 主版本号（ZSTD 从 SQL Server 2025 / 17.x 起提供），任何按引擎名硬编码的结论
+// 都会在别的实例上变成假承诺。探测失败不做乐观假设——返回 unverified，
+// 界面据此禁用选项，而不是让它写进任务后才在备份时失败。
+func (c SQLServerClient) CompressionCapabilities(ctx context.Context, source metadata.Source, password string) (map[string]CompressionCapability, error) {
+	args := c.connectionArgs(source)
+	args = append(args, "-d", "master", "-b", "-r", "1", "-W", "-s", "|", "-h", "-1", "-Q", instanceProfileQuery)
+	output, err := c.run(ctx, args, password, "")
+	if err != nil {
+		return nil, err
+	}
+	return compressionCapabilitiesFromProfile(parseInstanceProfile(output))
+}
+
+// CompressionDefault 返回实例的 backup compression default（"1"/"0"）。
+//
+// 单独查询而不是复用能力探测结果：能力探测失败时仍要尽量显示默认值，
+// 而默认值查询失败只需要让界面显示「未读取到」，不影响能力结论。
+func (c SQLServerClient) CompressionDefault(ctx context.Context, source metadata.Source, password string) (string, error) {
+	args := c.connectionArgs(source)
+	query := "SET NOCOUNT ON; SELECT CAST(value_in_use AS nvarchar(16)) FROM sys.configurations WHERE name = 'backup compression default';"
+	args = append(args, "-d", "master", "-b", "-r", "1", "-W", "-h", "-1", "-Q", query)
+	output, err := c.run(ctx, args, password, "")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(output), nil
+}
+
+// compressionCapabilitiesFromProfile 把实例事实翻译成能力结论，便于脱离数据库单测。
+func compressionCapabilitiesFromProfile(profile instanceProfile) (map[string]CompressionCapability, error) {
+	result := make(map[string]CompressionCapability, 5)
+	for _, option := range []string{CompressionOff, CompressionOn, CompressionZSTDLow, CompressionZSTDMed, CompressionZSTDHi} {
+		result[option] = CompressionCapability{Status: "unverified"}
+	}
+	// 默认值 ""（不指定）永远可选：它保持历史语句不变，是回退路径而不是新能力。
+	result[CompressionDefault] = CompressionCapability{Status: "supported"}
+
+	if profile.Edition == "" || profile.MajorVersion <= 0 {
+		reason := "无法读取实例版本或版本号，不能确认是否支持备份压缩"
+		if profile.Edition == "" {
+			reason = "无法读取实例 Edition，不能确认是否具备备份压缩许可"
+		}
+		for option := range result {
+			if option == CompressionDefault {
+				continue
+			}
+			result[option] = CompressionCapability{Status: "unverified", Reason: reason}
+		}
+		return result, nil
+	}
+
+	licensed := editionHasBackupCompression(profile.Edition)
+	// NO_COMPRESSION 不需要压缩许可，但 Express/Web 上也没有任何理由提供它，
+	// 统一按「该实例不支持备份压缩」处理，避免界面出现一个永远不会被选中的开关。
+	if !licensed {
+		reason := "实例 Edition 为 " + profile.Edition + "，不带备份压缩许可；SQL Server 备份压缩需要 Enterprise、Standard、Developer 或 Evaluation"
+		for option := range result {
+			if option == CompressionDefault {
+				continue
+			}
+			result[option] = CompressionCapability{Status: "unsupported", Reason: reason}
+		}
+		return result, nil
+	}
+
+	result[CompressionOff] = CompressionCapability{Status: "supported"}
+	result[CompressionOn] = CompressionCapability{Status: "supported"}
+	if profile.MajorVersion >= 17 {
+		for _, option := range []string{CompressionZSTDLow, CompressionZSTDMed, CompressionZSTDHi} {
+			result[option] = CompressionCapability{Status: "supported"}
+		}
+		return result, nil
+	}
+	reason := fmt.Sprintf("ZSTD 压缩算法自 SQL Server 2025（17.x）起提供，当前实例主版本为 %d（%s）", profile.MajorVersion, strings.TrimSpace(profile.ProductVer))
+	for _, option := range []string{CompressionZSTDLow, CompressionZSTDMed, CompressionZSTDHi} {
+		result[option] = CompressionCapability{Status: "unsupported", Reason: reason}
+	}
+	return result, nil
+}
+
+// editionHasBackupCompression 判断 Edition 是否带备份压缩许可。
+//
+// 只做前置正向判断，遇到不认识的 Edition 返回 false 并落到 unsupported，
+// 让用户看到明确原因后再决定，而不是默认允许后由 BACKUP 语句报错。
+func editionHasBackupCompression(edition string) bool {
+	upper := strings.ToUpper(edition)
+	for _, keyword := range []string{"ENTERPRISE", "STANDARD", "DEVELOPER", "EVALUATION"} {
+		if strings.Contains(upper, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseInstanceProfile 解析 instanceProfileQuery 的竖线分隔输出。
+//
+// 字段可能为空（如低版本没有 ProductMajorVersion），因此按位置取而不是跳过空行，
+// 否则会把后面的字段整体前移，得出错误的版本号。
+func parseInstanceProfile(output string) instanceProfile {
+	line := strings.TrimSpace(output)
+	if line == "" {
+		return instanceProfile{}
+	}
+	fields := strings.Split(line, "|")
+	value := func(index int) string {
+		if index >= len(fields) {
+			return ""
+		}
+		text := strings.TrimSpace(fields[index])
+		if strings.EqualFold(text, "NULL") {
+			return ""
+		}
+		return text
+	}
+	profile := instanceProfile{
+		Edition:            value(0),
+		ProductVer:         value(2),
+		CompressionDefault: value(3),
+	}
+	if major, err := strconv.Atoi(value(1)); err == nil && major > 0 {
+		profile.MajorVersion = major
+	} else if dot := strings.Index(profile.ProductVer, "."); dot > 0 {
+		// 回退：ProductVersion 形如 15.0.4322.2，首段即主版本号。
+		if major, err := strconv.Atoi(profile.ProductVer[:dot]); err == nil && major > 0 {
+			profile.MajorVersion = major
+		}
+	}
+	return profile
+}
+
 // Execute 按 full / differential / log 生成原生备份文件，并在同主机的授权执行器目录校验。
 func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, target metadata.StorageTarget, password, workPath string, spec BackupSpec) (ExecuteResult, error) {
 	kind := spec.Type
@@ -105,9 +258,12 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 	if strings.ContainsRune(serverOutput, '\'') {
 		return ExecuteResult{}, &ToolError{Code: "SERVER_PATH_REJECTED", Message: "SQL Server 备份路径包含不安全字符"}
 	}
-	statement := backupStatement(kind, source.Database, serverOutput)
+	statement, err := backupStatement(kind, source.Database, serverOutput, spec.Compress)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
 	scriptPath := filepath.Join(workPath, "backup.sql")
-	if err := os.WriteFile(scriptPath, []byte(statement), 0o600); err != nil {
+	if err = os.WriteFile(scriptPath, []byte(statement), 0o600); err != nil {
 		return ExecuteResult{}, err
 	}
 	args := c.connectionArgs(source)
@@ -129,20 +285,32 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 		return ExecuteResult{}, err
 	}
 	parts := strings.Split(strings.TrimSpace(output), "|")
-	if len(parts) != 6 {
+	if len(parts) != 7 {
 		return ExecuteResult{}, &ToolError{Code: "BACKUP_METADATA_MISSING", Message: "无法读取 SQL Server 备份 LSN 元数据"}
 	}
 	backupSize, _ := strconv.ParseInt(strings.TrimSpace(parts[5]), 10, 64)
+	// compressed_backup_size 是备份集在介质上占用的大小。未启用压缩时它与
+	// backup_size 相等；启用压缩后 backup_size 仍是未压缩的逻辑大小，
+	// 直接拿它当文件大小会让界面的文件大小和保留清理的预计释放空间虚高。
+	compressedSize, _ := strconv.ParseInt(strings.TrimSpace(parts[6]), 10, 64)
+	if compressedSize <= 0 {
+		compressedSize = backupSize
+	}
 	engineMetadata, _ := json.Marshal(map[string]any{
 		"logical": false, "scope": "database", "format": strings.TrimPrefix(extension, "."), "backup_type": kind,
-		"backup_set_id":       strings.TrimSpace(parts[0]),
-		"first_lsn":           strings.TrimSpace(parts[1]),
-		"last_lsn":            strings.TrimSpace(parts[2]),
-		"database_backup_lsn": strings.TrimSpace(parts[3]),
-		"checkpoint_lsn":      strings.TrimSpace(parts[4]),
-		"backup_size":         backupSize,
-		"server_local":        serverLocal,
-		"server_path":         serverOutput,
+		"backup_set_id":          strings.TrimSpace(parts[0]),
+		"first_lsn":              strings.TrimSpace(parts[1]),
+		"last_lsn":               strings.TrimSpace(parts[2]),
+		"database_backup_lsn":    strings.TrimSpace(parts[3]),
+		"checkpoint_lsn":         strings.TrimSpace(parts[4]),
+		"backup_size":            backupSize,
+		"compressed_backup_size": compressedSize,
+		// 算法必须随备份一起记录：ZSTD 备份无法在 2022 及更早实例上还原，
+		// 排查「为什么这份文件恢复不了」时只能靠这里，别无其他线索。
+		"compression":            spec.Compress,
+		"compression_algorithm":  compressionAlgorithm(spec.Compress),
+		"server_local":           serverLocal,
+		"server_path":            serverOutput,
 	})
 	producedPath := localOutput
 	if serverLocal {
@@ -153,15 +321,27 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 }
 
 // backupStatement 生成对应类型的 BACKUP 语句；日志备份使用 BACKUP LOG。
-func backupStatement(kind, database, destination string) string {
-	switch kind {
-	case "differential":
-		return fmt.Sprintf("BACKUP DATABASE [%s] TO DISK = N'%s' WITH DIFFERENTIAL, CHECKSUM;", database, destination)
-	case "log":
-		return fmt.Sprintf("BACKUP LOG [%s] TO DISK = N'%s' WITH CHECKSUM;", database, destination)
-	default:
-		return fmt.Sprintf("BACKUP DATABASE [%s] TO DISK = N'%s' WITH CHECKSUM;", database, destination)
+//
+// 压缩子句只在任务显式指定时出现：空串保持历史语句逐字节不变，
+// 因为现有 SQL Server 全量、差异、日志链式恢复的验收结论都基于 WITH CHECKSUM。
+func backupStatement(kind, database, destination, compress string) (string, error) {
+	clause, err := compressionClauses(compress)
+	if err != nil {
+		return "", &ToolError{Code: "COMPRESSION_OPTION_INVALID", Message: err.Error()}
 	}
+	verb := "DATABASE"
+	options := make([]string, 0, 3)
+	if kind == "log" {
+		verb = "LOG"
+	} else if kind == "differential" {
+		options = append(options, "DIFFERENTIAL")
+	}
+	if clause != "" {
+		options = append(options, clause)
+	}
+	// CHECKSUM 始终保留：它是文件完整性校验的前提，不能为了压缩而牺牲。
+	options = append(options, "CHECKSUM")
+	return fmt.Sprintf("BACKUP %s [%s] TO DISK = N'%s' WITH %s;", verb, database, destination, strings.Join(options, ", ")), nil
 }
 
 // recoveryModel 读取数据库恢复模式，用于在日志备份前给出明确前提判断。
@@ -182,12 +362,30 @@ func (c SQLServerClient) recoveryModel(ctx context.Context, source metadata.Sour
 
 // backupMetadataQuery 只查询 msdb.dbo.backupset 中真实存在的列。
 // SQL Server 没有 backup_lsn 列；差异与日志链依赖 database_backup_lsn 与序列号。
-// backup_size 由数据库服务登记，服务器本地备份用它作为文件大小的可信来源。
+// backup_size 是未压缩的逻辑大小；compressed_backup_size 才是介质上实际占用，
+// 服务器本地备份必须用后者，否则启用压缩后登记的文件大小会虚高。
 func backupMetadataQuery(database, kind string) string {
 	// D=全量，I=差异，L=事务日志；类型必须与本次备份一致，否则会误取历史记录。
 	setType := map[string]string{"full": "D", "differential": "I", "log": "L"}[kind]
-	return fmt.Sprintf("SELECT TOP (1) backup_set_id, first_lsn, last_lsn, database_backup_lsn, checkpoint_lsn, backup_size "+
+	return fmt.Sprintf("SELECT TOP (1) backup_set_id, first_lsn, last_lsn, database_backup_lsn, checkpoint_lsn, backup_size, compressed_backup_size "+
 		"FROM msdb.dbo.backupset WHERE database_name = '%s' AND type = '%s' ORDER BY backup_set_id DESC;", database, setType)
+}
+
+// compressionAlgorithm 把压缩选项映射为写入 EngineMetadata 的算法名。
+//
+// 空串表示未指定子句、算法由实例决定（MS_XPRESS），因此不能写成 xpress：
+// 那样会把「实例默认」固化成错误的事实。
+func compressionAlgorithm(compress string) string {
+	switch compress {
+	case CompressionOn:
+		return "server_default"
+	case CompressionZSTDLow, CompressionZSTDMed, CompressionZSTDHi:
+		return "zstd"
+	case CompressionOff:
+		return "none"
+	default:
+		return ""
+	}
 }
 
 // connectionArgs 组装 sqlcmd 连接参数。

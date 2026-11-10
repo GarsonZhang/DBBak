@@ -46,10 +46,26 @@ MySQL 8.4 属于 LTS 系列。mysqldump 是逻辑备份工具，不是物理差�
 | MySQL 8.4.13 + mysqldump 8.4.13 | 已实现并在上述 Windows 隔离组合验证 | 产品内未实现，不用重复全量冒充 | binlog 全量坐标 + 时间点重放脚本已验证；产品调度未接入 | 独立 dbbak_restore 已验证 |
 | MySQL + Percona XtraBackup（物理路线，`backup_method=physical`） | 已实现（`internal/backup/mysqlphysical.go`），**未运行** | 未实现，明确返回 `BACKUP_TYPE_UNSUPPORTED` | binlog 归档已实现（`mysqlbinlog --raw`），**未运行** | **未运行**；见 `DBBak_MySQL物理备份验证说明.md` |
 | SQL Server 2025（17.0.1000.7）+ sqlcmd（Windows，SQL 登录，FULL 恢复模式） | 已验证：BACKUP DATABASE WITH CHECKSUM | 已验证：WITH DIFFERENTIAL，挂到全量链 | 已验证：BACKUP LOG，`.trn` 挂链 | 全量+差异+日志链式恢复已验证（NORECOVERY 链，无 REPLACE；日志后数据未回放） |
-| SQL Server + Linux sqlcmd18（Docker `mysql:8.4.13` 基础镜像内装 mssql-tools18） | **未运行**：连接需数据源勾选 `trust_server_certificate`（自签名实例证书） | 未运行 | 未运行 | 未运行 |
-| PostgreSQL 18.6 + pg_basebackup 18.6（Windows） | 已实现并在上述隔离组合验证 | 未实现 | WAL 归档+目标 LSN 脚本已验证；产品调度未接入 | 独立集群已验证 |
+| SQL Server + Linux sqlcmd18（Docker `mysql:8.4.13` 基础镜像内装 mssql-tools18） | **未运行**：连接需数据源勾选 `trust_server_certificate`（自签名实例证书） | 未运行 | 未运行 | 未运行 || PostgreSQL 18.6 + pg_basebackup 18.6（Windows） | 已实现并在上述隔离组合验证 | 未实现 | WAL 归档+目标 LSN 脚本已验证；产品调度未接入 | 独立集群已验证 |
 | PostgreSQL pgBackRest | 未实现 | 未实现 | 未实现 | 未运行 |
 | PostgreSQL pg_dump | 未实现 | 未实现 | 未实现 | 未运行 |
+
+## SQL Server 备份压缩
+
+压缩是任务级选项（`jobs.backup_compression`），空值表示不写压缩子句、沿用实例 `backup compression default`，因此升级后既有任务语句不变。可用档位由实例实时判定（`GET /api/v1/sources/{id}/compression`），不按引擎名硬编码。
+
+| 压缩选项 | 生成子句 | 前提 | 验证状态 |
+| --- | --- | --- | --- |
+| 空（不指定） | 无压缩子句 | 无 | 已验证：即现有 `WITH CHECKSUM` 语句，历史验收结论继续有效 |
+| `off` | `NO_COMPRESSION` | 实例带备份压缩许可（Express/Web 不支持，界面置灰） | 未运行 |
+| `on` | `COMPRESSION` | 同上；算法随实例 `backup compression algorithm`，默认 MS_XPRESS | 未运行 |
+| `zstd_low` / `zstd_medium` / `zstd_high` | `COMPRESSION (ALGORITHM = ZSTD, LEVEL = …)` | SQL Server 2025（17.x）及以上，且带备份压缩许可 | 未运行 |
+
+压缩相关约束：
+
+- **ZSTD 备份只能在 2025 及更高版本实例还原**；恢复到 2022 及更早实例会失败。实际算法写入备份记录的 `engine_metadata`（`compression`、`compression_algorithm`），恢复前必须核对该字段。
+- 启用压缩后 `backup_size` 仍是未压缩的逻辑大小，文件大小一律取 `compressed_backup_size`（服务器本地备份）或实际文件大小（执行器可见）；两者不可混用。
+- 逐个档位是否真正生效必须以 `compressed_backup_size < backup_size` 为证据，语句执行成功不算压缩验证通过。验证方法见 `DBBak_SQLServer验证脚本说明.md` 的 `DBBAK_TEST_SQLSERVER_COMPRESSION`。
 
 ## 随安装包分发的客户端工具
 

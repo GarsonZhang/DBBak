@@ -34,11 +34,14 @@ type jobInput struct {
 	BackupType      string `json:"backup_type"`
 	// BackupMethod 选择备份路线：空为引擎默认（MySQL 逻辑全量），logical 为 mysqldump，
 	// physical 为 Percona XtraBackup。路线一旦写入任务就固定，恢复语义随之一致。
-	BackupMethod  string `json:"backup_method"`
-	RetentionDays int    `json:"retention_days"`
-	MinFull       int    `json:"min_full"`
-	AutoCleanup   bool   `json:"auto_cleanup"`
-	Revision      int64  `json:"revision"`
+	BackupMethod string `json:"backup_method"`
+	// BackupCompression 是 SQL Server 原生备份的压缩选项，空值表示不写压缩子句、
+	// 沿用实例默认。取值由备份包统一定义，其他引擎保存时被清空。
+	BackupCompression string `json:"backup_compression"`
+	RetentionDays     int    `json:"retention_days"`
+	MinFull           int    `json:"min_full"`
+	AutoCleanup       bool   `json:"auto_cleanup"`
+	Revision          int64  `json:"revision"`
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
@@ -121,9 +124,10 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 		LocationKind: strings.TrimSpace(input.LocationKind), ServerDir: strings.TrimSpace(input.ServerDir),
 		Subdir: strings.TrimSpace(input.Subdir), Timezone: input.Timezone, ScheduleType: input.ScheduleType, TimeOfDay: input.TimeOfDay,
 		Weekday: input.Weekday, IntervalMinutes: input.IntervalMinutes, Enabled: input.Enabled,
-		BackupType:    strings.TrimSpace(input.BackupType),
-		BackupMethod:  strings.TrimSpace(input.BackupMethod),
-		RetentionDays: input.RetentionDays, MinFull: input.MinFull, AutoCleanup: input.AutoCleanup,
+		BackupType:        strings.TrimSpace(input.BackupType),
+		BackupMethod:      strings.TrimSpace(input.BackupMethod),
+		BackupCompression: strings.TrimSpace(input.BackupCompression),
+		RetentionDays:     input.RetentionDays, MinFull: input.MinFull, AutoCleanup: input.AutoCleanup,
 	}
 	if job.LocationKind == "" {
 		job.LocationKind = "storage"
@@ -180,6 +184,12 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 	if source.Engine == "sqlserver" && !s.config.SQLServerEnabled {
 		// 未验收的备份路径不得默认启用；完成验证后由 DBBAK_SQLSERVER_ENABLED=1 显式放开。
 		return job, fmt.Errorf("SQL Server 适配器已实现，但尚未通过真实备份与异名恢复验收；先执行 DBBak_文档/DBBak_SQLServer验证脚本说明.md 中的脚本，再设置 DBBAK_SQLSERVER_ENABLED=1 重启")
+	}
+	// 压缩选项只对 SQL Server 原生 BACKUP 有意义。其他引擎的压缩由各自工具参数控制，
+	// 在这里清空而不是报错：界面在切换引擎时不会残留旧值，也不会让用户看到
+	// 一个与他所选的数据库无关的校验失败。
+	if err := s.validateCompression(source, &job); err != nil {
+		return job, err
 	}
 	// 备份位置类型决定目标解析方式：数据库服务器本地目录不经过存储位置，
 	// 执行器无法预验证远程目录可写，真实结果由运行时的数据库服务给出。

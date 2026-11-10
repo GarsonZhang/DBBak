@@ -14,8 +14,8 @@ func (s *Store) CreateJob(ctx context.Context, job Job) error {
 		// 迁移前模式缺省为存储位置；显式 NULL 会绕过列默认值，必须在写入前归一化。
 		job.LocationKind = "storage"
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(id,name,source_id,target_id,location_kind,server_dir,subdir,timezone,schedule_type,time_of_day,weekday,interval_minutes,enabled,backup_type,backup_method,retention_days,min_full,auto_cleanup,next_run_at,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		job.ID, job.Name, job.SourceID, nullableString(job.TargetID), job.LocationKind, job.ServerDir, job.Subdir, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.BackupMethod, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), job.Revision, formatTime(job.CreatedAt), formatTime(job.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs(id,name,source_id,target_id,location_kind,server_dir,subdir,timezone,schedule_type,time_of_day,weekday,interval_minutes,enabled,backup_type,backup_method,backup_compression,retention_days,min_full,auto_cleanup,next_run_at,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		job.ID, job.Name, job.SourceID, nullableString(job.TargetID), job.LocationKind, job.ServerDir, job.Subdir, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.BackupMethod, job.BackupCompression, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), job.Revision, formatTime(job.CreatedAt), formatTime(job.UpdatedAt))
 	return err
 }
 
@@ -24,8 +24,8 @@ func (s *Store) UpdateJob(ctx context.Context, job Job) error {
 	if job.LocationKind == "" {
 		job.LocationKind = "storage"
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET name=?,source_id=?,target_id=?,location_kind=?,server_dir=?,subdir=?,timezone=?,schedule_type=?,time_of_day=?,weekday=?,interval_minutes=?,enabled=?,backup_type=?,backup_method=?,retention_days=?,min_full=?,auto_cleanup=?,next_run_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
-		job.Name, job.SourceID, nullableString(job.TargetID), nullableString(job.LocationKind), job.ServerDir, job.Subdir, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.BackupMethod, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), formatTime(job.UpdatedAt), job.ID, job.Revision)
+	result, err := s.db.ExecContext(ctx, `UPDATE jobs SET name=?,source_id=?,target_id=?,location_kind=?,server_dir=?,subdir=?,timezone=?,schedule_type=?,time_of_day=?,weekday=?,interval_minutes=?,enabled=?,backup_type=?,backup_method=?,backup_compression=?,retention_days=?,min_full=?,auto_cleanup=?,next_run_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`,
+		job.Name, job.SourceID, nullableString(job.TargetID), nullableString(job.LocationKind), job.ServerDir, job.Subdir, job.Timezone, job.ScheduleType, job.TimeOfDay, job.Weekday, job.IntervalMinutes, job.Enabled, job.BackupType, job.BackupMethod, job.BackupCompression, job.RetentionDays, job.MinFull, job.AutoCleanup, nullableTime(job.NextRunAt), formatTime(job.UpdatedAt), job.ID, job.Revision)
 	if err != nil {
 		return err
 	}
@@ -146,13 +146,13 @@ func (s *Store) DeleteRunLogs(ctx context.Context, runID string) error {
 	return err
 }
 
-const jobSelect = `SELECT j.id,j.name,j.source_id,j.target_id,j.location_kind,j.server_dir,j.subdir,j.timezone,j.schedule_type,j.time_of_day,j.weekday,j.interval_minutes,j.enabled,j.backup_type,j.backup_method,j.retention_days,j.min_full,j.auto_cleanup,j.next_run_at,j.revision,j.created_at,j.updated_at FROM jobs j`
+const jobSelect = `SELECT j.id,j.name,j.source_id,j.target_id,j.location_kind,j.server_dir,j.subdir,j.timezone,j.schedule_type,j.time_of_day,j.weekday,j.interval_minutes,j.enabled,j.backup_type,j.backup_method,j.backup_compression,j.retention_days,j.min_full,j.auto_cleanup,j.next_run_at,j.revision,j.created_at,j.updated_at FROM jobs j`
 
 func scanJob(row rowScanner) (Job, error) {
 	var job Job
 	var next, targetID, locationKind sql.NullString
 	var created, updated string
-	err := row.Scan(&job.ID, &job.Name, &job.SourceID, &targetID, &locationKind, &job.ServerDir, &job.Subdir, &job.Timezone, &job.ScheduleType, &job.TimeOfDay, &job.Weekday, &job.IntervalMinutes, &job.Enabled, &job.BackupType, &job.BackupMethod, &job.RetentionDays, &job.MinFull, &job.AutoCleanup, &next, &job.Revision, &created, &updated)
+	err := row.Scan(&job.ID, &job.Name, &job.SourceID, &targetID, &locationKind, &job.ServerDir, &job.Subdir, &job.Timezone, &job.ScheduleType, &job.TimeOfDay, &job.Weekday, &job.IntervalMinutes, &job.Enabled, &job.BackupType, &job.BackupMethod, &job.BackupCompression, &job.RetentionDays, &job.MinFull, &job.AutoCleanup, &next, &job.Revision, &created, &updated)
 	if err != nil {
 		return Job{}, err
 	}

@@ -157,6 +157,104 @@ func (s *Server) probeSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "supported", "server_version": version, "method": source.Engine, "route": route, "backup_type": backupType})
 }
 
+// sourceAdapterAndPassword 取出数据源的适配器与解密后的密码，供连接测试和能力查询共用。
+//
+// 密码只在调用栈内传递，不写日志、不写响应；解密失败必须显式失败，
+// 不能拿空密码去连接——那会把「主密钥不可用」误报成「数据库认证失败」。
+func (s *Server) sourceAdapterAndPassword(r *http.Request, source metadata.Source, route string) (backup.Adapter, string, error) {
+	adapter, err := s.adapters.ForRoute(source.Engine, route)
+	if err != nil {
+		return nil, "", err
+	}
+	ciphertext, err := s.store.SourcePassword(r.Context(), source.ID)
+	if err != nil {
+		return nil, "", err
+	}
+	password, err := s.keys.Decrypt(ciphertext)
+	if err != nil {
+		return nil, "", fmt.Errorf("凭据解密失败，请检查主密钥")
+	}
+	return adapter, password, nil
+}
+
+// sourceCompressionCapabilities 返回某数据源可用的备份压缩选项。
+//
+// 界面在渲染任务表单时需要知道哪些选项可选，因此这里按数据源实时查询数据库实例：
+// 压缩能力取决于 Edition（Express/Web 无备份压缩许可）与主版本（ZSTD 需要 2025 及以上），
+// 任何静态结论都会在别的实例上变成假承诺。探测失败时返回 unverified，
+// 前端据此禁用选项并显示原因，而不是让它先写进任务、等到备份时才报错。
+func (s *Server) sourceCompressionCapabilities(w http.ResponseWriter, r *http.Request) {
+	source, err := s.store.GetSource(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	response := map[string]any{
+		"engine":       source.Engine,
+		"supported":    false,
+		"capabilities": map[string]backup.CompressionCapability{},
+	}
+	if source.Engine != "sqlserver" {
+		// 其他引擎没有 BACKUP COMPRESSION 语义，压缩由各自工具参数控制；
+		// 明确返回空能力集，避免界面渲染出一个对 MySQL 毫无意义的开关。
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	response["supported"] = true
+	adapter, password, err := s.sourceAdapterAndPassword(r, source, "")
+	if err != nil {
+		// 探测本身失败不应让界面崩掉：退化为全部 unverified，用户仍能看到原因。
+		response["capabilities"] = backup.UnverifiedCompressionCapabilities("无法读取数据源凭据：" + err.Error())
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	prober, ok := adapter.(backup.CompressionSupported)
+	if !ok {
+		response["capabilities"] = backup.UnverifiedCompressionCapabilities(source.Engine + " 适配器未实现压缩能力探测")
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	capabilities, err := prober.CompressionCapabilities(r.Context(), source, password)
+	if err != nil {
+		log.Printf("数据源 %s 压缩能力探测失败: %s", source.ID, backup.DiagnosticError(err))
+		message := backup.SafeErrorMessage(err)
+		if message == "" {
+			message = "无法连接数据库实例，不能确认压缩能力"
+		}
+		response["capabilities"] = backup.UnverifiedCompressionCapabilities(message)
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
+	response["capabilities"] = capabilities
+	// 实例默认压缩行为要展示给用户：选「不指定」时实际会不会压缩，取决于这个值，
+	// 把它藏起来会让「不指定」变成一个结果不可预期的选项。
+	if provider, ok := prober.(backup.CompressionDefaultProvider); ok {
+		if value, defaultErr := provider.CompressionDefault(r.Context(), source, password); defaultErr == nil {
+			response["compression_default"] = value
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// validateCompression 在保存任务时复核压缩选项，并把非 SQL Server 引擎的值清空。
+//
+// 只校验取值合法与引擎匹配，不在这里重新连接数据库实例：保存任务不应该因为
+// 实例临时不可达而失败。真正的能力拦截发生在界面（选项不可选）和运行时的
+// BACKUP 语句上——实例不支持时引擎自己会报错，不会产生虚假的成功记录。
+func (s *Server) validateCompression(source metadata.Source, job *metadata.Job) error {
+	if job.BackupCompression == "" {
+		return nil
+	}
+	if source.Engine != "sqlserver" {
+		job.BackupCompression = ""
+		return nil
+	}
+	if !backup.KnownCompression(job.BackupCompression) {
+		return fmt.Errorf("备份压缩选项必须为 off、on、zstd_low、zstd_medium、zstd_high 或留空")
+	}
+	return nil
+}
+
 func validateServerRoot(root, serverRoot string) (string, error) {
 	if serverRoot == "" {
 		return "", nil
