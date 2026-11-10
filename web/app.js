@@ -2,6 +2,18 @@
   'use strict';
   const $ = (s, p=document) => p.querySelector(s);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  // crypto.randomUUID 只在安全上下文（https 或 localhost）可见；内网用 http://ip:port 打开
+  // 控制台时它是 undefined，手动执行会直接抛 “not a function”。这里保留随机 UUID 语义，
+  // 在不可用时用 getRandomValues 拼出同格式值，最后再退到 Math.random。
+  const uuid = () => {
+    if(typeof crypto!=='undefined'&&typeof crypto.randomUUID==='function')return crypto.randomUUID();
+    const bytes=new Uint8Array(16);
+    if(typeof crypto!=='undefined'&&typeof crypto.getRandomValues==='function')crypto.getRandomValues(bytes);
+    else for(let i=0;i<16;i++)bytes[i]=Math.floor(Math.random()*256);
+    bytes[6]=(bytes[6]&0x0f)|0x40;bytes[8]=(bytes[8]&0x3f)|0x80;
+    const hex=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+    return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  };
   const ico = (n,s) => window.icon(n,s);
   const main = $('#main'), modal = $('#modal');
   const pages = {overview:'备份概览',tasks:'备份任务',databases:'数据库',storage:'存储位置',logs:'执行日志',cleanup:'保留与清理',deployment:'部署与执行器',settings:'系统设置'};
@@ -368,7 +380,7 @@
   async function action(element){const id=element.dataset.id,name=element.dataset.action;
     if(name==='new-task')return taskModal();if(name==='edit-task')return taskModal(job(id));if(name==='add-db')return databaseModal();if(name==='edit-db')return databaseModal(state.sources.find(x=>x.id===id));if(name==='add-location')return storageModal();if(name==='edit-location')return storageModal(state.targets.find(x=>x.id===id));if(name==='close-modal')return closeModal();if(name==='refresh')return loadAll();if(name==='view-log')return viewLog(id);if(name==='log-filter'){state.logFilter=element.dataset.value;return render();}
     if(name==='logout'){await api('/api/v1/auth/logout',{method:'POST',body:'{}'});return showLogin();}
-    if(name==='run'){element.disabled=true;try{await api(`/api/v1/jobs/${id}/runs`,{method:'POST',body:'{}',headers:{'Idempotency-Key':`ui-${crypto.randomUUID()}`}});toast('已创建真实备份运行。');await loadAll({quiet:true});}catch(error){toast(error.message,true);element.disabled=false;}return;}
+    if(name==='run'){element.disabled=true;try{await api(`/api/v1/jobs/${id}/runs`,{method:'POST',body:'{}',headers:{'Idempotency-Key':`ui-${uuid()}`}});toast('已创建真实备份运行。');await loadAll({quiet:true});}catch(error){toast(error.message,true);element.disabled=false;}return;}
     if(name==='probe'){element.disabled=true;try{const r=await api(`/api/v1/sources/${id}/probe`,{method:'POST',body:'{}'});toast(`真实连接成功：${r.server_version}，连接测试通过。`);}catch(error){toast(`${error.code}: ${error.message}`,true);}finally{element.disabled=false;}return;}
     if(name==='check-storage'){try{await api(`/api/v1/storage-targets/${id}/check`,{method:'POST',body:'{}'});toast('存储位置真实写检查通过。');}catch(error){toast(error.message,true);}return;}
     if(name==='preview-cleanup'){if(!state.cleanupJobID)return;try{state.cleanupPreview=await api(`/api/v1/jobs/${state.cleanupJobID}/cleanup-previews`,{method:'POST',body:'{}'});render();toast('服务端清理预览已生成。');}catch(error){toast(error.message,true);}return;}
