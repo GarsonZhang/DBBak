@@ -1,5 +1,5 @@
-# 阶段五生产镜像示例；应用与基础镜像均使用明确版本，不使用 latest。
-FROM golang:1.27.3-bookworm AS build
+
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.27.3-bookworm AS build
 # 构建阶段默认使用国内模块代理：容器内没有宿主机的 GOPROXY 配置，
 # 直连 proxy.golang.org 在国内网络会 dial tcp 超时导致 go mod download 失败。
 # 不追加 direct：镜像缺失模块时立即报错，避免回退到 VCS 拉取再超时。
@@ -17,7 +17,7 @@ COPY web/ ./web/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -trimpath -buildvcs=false \
     -ldflags='-s -w -buildid=' -o /out/dbbak ./cmd/dbbak
 
-FROM mysql:8.4.13
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/mysql:8.4.13
 LABEL org.opencontainers.image.version="0.2.0-phase5"
 # SQL Server 适配器（连接探测、BACKUP DATABASE、msdb 元数据查询）全部通过 sqlcmd 执行。
 # 微软的 mssql-tools 不随任何通用基础镜像分发，基础镜像只带 MySQL 客户端，缺了它

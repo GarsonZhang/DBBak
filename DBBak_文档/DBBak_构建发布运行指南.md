@@ -490,6 +490,8 @@ sudo ./deploy/linux/uninstall.sh --yes
 | build | `golang:1.27.3-bookworm` | 只复制 `go.mod`/`go.sum`、`embed.go`、`cmd/`、`internal/`、`web/`，`CGO_ENABLED=0` 构建 |
 | runtime | `mysql:8.4.13` | 自带 `mysql`/`mysqldump`，安装 curl 与 `sqlcmd`（微软 mssql-tools18），创建 UID/GID 10001 非 root 用户 |
 
+两个基础镜像都带 `${BASE_REGISTRY}` 前缀，默认空值即 `docker.io/library/...`。构建主机配置了 `registry-mirrors`（镜像代理返回 503 会直接让构建失败）或使用内网私有仓库时，用 `--build-arg BASE_REGISTRY=<前缀>/` 改走可达来源，不必改 dockerd 也不必改版本标签。
+
 运行时目录：`/var/lib/dbbak`（数据）、`/backups`（仓库）、`/etc/dbbak-key`（主密钥），三者都声明为 `VOLUME`。默认 `CMD ["serve"]`，监听 `0.0.0.0:8080`。
 
 SQL Server 路线完全依赖 `sqlcmd`（`internal/backup/sqlserver.go`：连接探测 `SELECT @@VERSION`、`BACKUP DATABASE`、`msdb` 元数据查询都走它），而 `mysql:8.4.13` 只带 MySQL 客户端。所以镜像在 runtime 阶段从微软 RHEL 9 源装 `msodbcsql18` 与 `mssql-tools18`，并把 `/opt/mssql-tools18/bin/sqlcmd` 软链到 `/usr/local/bin/sqlcmd`（`config.Load` 不做 tools 目录解析，只按 PATH 查找）。
@@ -512,6 +514,15 @@ docker build --build-arg GOPROXY=https://proxy.golang.org,direct \
 ```
 
 模块代理仍不可达时，先确认构建容器能否出网。`docker build --network host` 只共用宿主网络命名空间，代理地址本身不通时无效；这种情况应改为配置可达的 `GOPROXY`，而不是关闭校验。
+
+基础镜像拉取失败（如 `unexpected status from HEAD request to https://<mirror>/v2/library/mysql/manifests/...: 503 Service Unavailable`）属于镜像代理不可用，不是 Dockerfile 问题。改用可达来源：
+
+```bash
+docker build --build-arg BASE_REGISTRY=192.168.10.221/ \
+  -f deploy/docker/Dockerfile -t dbbak:0.2.0-phase2 .
+```
+
+私有仓库只做缓存、没有反向代理官方库时应写全路径，例如 `--build-arg BASE_REGISTRY=192.168.10.221/library/`，并按实际镜像名调整两个 `FROM` 的仓库层级。
 
 runtime 阶段的 `sqlcmd` 默认安装，需要关闭时：
 
