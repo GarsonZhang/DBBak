@@ -190,6 +190,65 @@ func ensureContained(root, candidate string) error {
 	return nil
 }
 
+// NormalizeServerDir 规范化数据库服务器本机的绝对目录（如 SQL Server 所在主机的 D:\bak）。
+//
+// 与 NormalizeSubdir 不同，这个路径属于**数据库服务器**而不是执行器：执行器可能运行在
+// Linux、Docker 或 Kubernetes 中，此时 filepath.IsAbs / filepath.VolumeName 会把合法的
+// Windows 盘符路径判成相对路径（Linux 上 E:\bak 不是绝对路径），导致任务无法保存。
+// 因此这里按 Windows 语义做纯文本校验，不做任何文件系统访问：
+// 接受驱动器路径（C:\bak、D:/bak）与 UNC（\\host\share\bak）。
+// 拒绝相对路径、rooted 路径、盘符相对写法（C:bak）、设备命名空间（\\.\、\\?\）、通配符和控制字符。
+// 目录是否存在、服务账号是否有写权限只有数据库服务自己知道，必须留给运行时反馈。
+func NormalizeServerDir(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", fmt.Errorf("数据库服务器目录必填：请填写数据库服务器上的本地绝对路径（如 D:\\bak）")
+	}
+	if len([]rune(trimmed)) > 300 {
+		return "", fmt.Errorf("数据库服务器目录不超过 300 个字符")
+	}
+	if strings.ContainsRune(trimmed, '\x00') || strings.ContainsAny(trimmed, "\r\n") {
+		return "", fmt.Errorf("数据库服务器目录包含控制字符")
+	}
+	if strings.ContainsRune(trimmed, '\'') {
+		// 该目录会拼进 SQL Server 的单引号字符串字面量，单引号既可用于注入也说明路径本身异常。
+		return "", fmt.Errorf("数据库服务器目录包含不安全字符（单引号），请检查是否粘贴时混入了引号")
+	}
+	// 统一成分隔符后校验，存储时保留一份稳定的写法。
+	normalized := strings.ReplaceAll(trimmed, "/", `\`)
+	if strings.ContainsAny(normalized, `*?"<>|`) {
+		return "", fmt.Errorf("数据库服务器目录不能包含 * ? \" < > | 等通配或非法字符")
+	}
+	segments := strings.Split(normalized, `\`)
+	for _, segment := range segments {
+		if segment == "." || segment == ".." {
+			return "", fmt.Errorf("数据库服务器目录不能包含 . 或 .. 段")
+		}
+	}
+	unc := strings.HasPrefix(normalized, `\\`)
+	isDrive := len(normalized) >= 2 && normalized[1] == ':' &&
+		((normalized[0] >= 'a' && normalized[0] <= 'z') || (normalized[0] >= 'A' && normalized[0] <= 'Z'))
+	switch {
+	case unc:
+		// \\服务器\共享\目录 → segments 为 ["", "", "服务器", "共享", "目录"...]
+		if len(segments) < 4 || segments[2] == "" || segments[3] == "" {
+			return "", fmt.Errorf("数据库服务器目录 %q 不是有效的 UNC 路径：应为 \\\\服务器\\共享名\\目录", trimmed)
+		}
+	case isDrive:
+		// C:\bak 或 D:bak；C: 后面直接跟字符（如 C:bak 以外的 C:1）也视为非法写法。
+		if len(normalized) > 2 && normalized[2] != '\\' {
+			return "", fmt.Errorf("数据库服务器目录 %q 格式不正确：盘符后应接反斜杠，如 D:\\bak", trimmed)
+		}
+	default:
+		return "", fmt.Errorf("数据库服务器目录 %q 不是绝对路径：请填写数据库服务器本机的绝对路径（如 D:\\bak 或 \\\\服务器\\共享\\目录）", trimmed)
+	}
+	// 结尾反斜杠去掉（根目录 D:\ 与 UNC 根 \\host\share 保留），避免与文件名拼接时出现双反斜杠。
+	if len(normalized) > 3 && strings.HasSuffix(normalized, `\`) {
+		normalized = strings.TrimRight(normalized, `\`)
+	}
+	return normalized, nil
+}
+
 // CheckWritable 通过创建并删除随机临时文件验证真实写权限。
 func CheckWritable(root string) error {
 	resolved, err := PrepareRoot(root)

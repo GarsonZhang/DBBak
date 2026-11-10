@@ -264,8 +264,17 @@ func TestServerLocalBackupJobValidation(t *testing.T) {
 	if err = json.Unmarshal(readBytes(t, sqlSource), &mssql); err != nil {
 		t.Fatal(err)
 	}
+	// 存储位置由任务目录自动登记；这里先建一个任务拿到 target_id，用于验证“两种落点混用”必须被拒。
+	targetProbe := postJSON(t, client, httpServer.URL+"/api/v1/jobs", `{"name":"存储位置任务","source_id":"`+mysql.ID+`","storage_root":`+jsonString(t.TempDir())+`,"timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, true)
+	if targetProbe.StatusCode != http.StatusCreated {
+		t.Fatalf("存储位置任务创建失败: %s %s", targetProbe.Status, readBody(t, targetProbe))
+	}
+	var storageTarget metadata.Job
+	if err = json.Unmarshal(readBytes(t, targetProbe), &storageTarget); err != nil {
+		t.Fatal(err)
+	}
 
-	// 非法组合必须逐一拒绝：MySQL 引擎、缺少服务器目录、同时给出存储位置。
+	// 非法组合必须逐一拒绝：MySQL 引擎、缺少服务器目录、相对路径、服务器本地模式却绑定了存储位置。
 	rejected := []struct {
 		name   string
 		source string
@@ -275,7 +284,7 @@ func TestServerLocalBackupJobValidation(t *testing.T) {
 		{"MySQL 不支持服务器本地模式", mysql.ID, `{"name":"错1","source_id":"` + mysql.ID + `","location_kind":"database_server","server_dir":"D:\\bak","timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, "只支持 SQL Server"},
 		{"缺少服务器目录", mssql.ID, `{"name":"错2","source_id":"` + mssql.ID + `","location_kind":"database_server","timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, "绝对路径"},
 		{"相对路径服务器目录", mssql.ID, `{"name":"错3","source_id":"` + mssql.ID + `","location_kind":"database_server","server_dir":"bak","timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, "绝对路径"},
-		{"与存储位置互斥", mssql.ID, `{"name":"错4","source_id":"` + mssql.ID + `","location_kind":"database_server","server_dir":"D:\\bak","storage_root":` + jsonString(t.TempDir()) + `,"timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, "不使用存储位置"},
+		{"服务器本地模式绑定存储位置", mssql.ID, `{"name":"错4","source_id":"` + mssql.ID + `","location_kind":"database_server","server_dir":"D:\\bak","target_id":` + jsonString(storageTarget.ID) + `,"timezone":"Asia/Shanghai","schedule_type":"daily","time_of_day":"02:00","weekday":0,"interval_minutes":15,"enabled":false,"retention_days":30,"min_full":1,"auto_cleanup":false}`, "不使用存储位置"},
 	}
 	for _, item := range rejected {
 		resp := postJSON(t, client, httpServer.URL+"/api/v1/jobs", item.body, true)
@@ -296,13 +305,20 @@ func TestServerLocalBackupJobValidation(t *testing.T) {
 	if job.LocationKind != "database_server" || job.TargetID != "" || job.ServerDir != `D:\bak` {
 		t.Fatalf("任务字段不符: %+v", job)
 	}
-	// 任务列表接口返回相同字段，前端据此渲染。
+	// 任务列表接口返回相同字段，前端据此渲染。列表包含前面用于取 target_id 的存储位置任务，
+	// 因此按 ID 定位本次创建的服务器本地任务，而不是假设列表长度为 1。
 	jobs := getJSON(t, client, httpServer.URL+"/api/v1/jobs")
 	var listed []metadata.Job
 	if err = json.Unmarshal(readBytes(t, jobs), &listed); err != nil {
 		t.Fatal(err)
 	}
-	if len(listed) != 1 || listed[0].LocationKind != "database_server" || listed[0].TargetID != "" {
+	var listedJob *metadata.Job
+	for i := range listed {
+		if listed[i].ID == job.ID {
+			listedJob = &listed[i]
+		}
+	}
+	if listedJob == nil || listedJob.LocationKind != "database_server" || listedJob.TargetID != "" || listedJob.ServerDir != `D:\bak` {
 		t.Fatalf("任务列表字段不符: %+v", listed)
 	}
 }

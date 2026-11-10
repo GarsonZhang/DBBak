@@ -193,19 +193,14 @@ func (s *Server) jobFromInput(r *http.Request, input jobInput) (metadata.Job, er
 			// 会让人无从下手；这里必须说明可执行的动作。
 			return job, fmt.Errorf("数据库服务器本地备份不使用存储位置，但任务仍关联存储位置 %q；请取消本次编辑后重新打开任务，或改回「存储位置」类型", job.TargetID)
 		}
-		// 存储目录字段在服务器本地模式下虽被隐藏，切换时仍可能残留旧值（前端 switch 时也会清空并
-		// 置 disabled，但旧版本页面或手工调用 API 仍可能带上）；它与本模式无关，直接忽略而不是拒绝
-		// 保存，避免用户看不到、改不掉的字段把任务卡死。
-		// 该分支的报错只对应上面两种真实情况（空值 / 相对路径），不得复用为其它校验失败的原因。
-		if filepath.VolumeName(job.ServerDir) == "" || !filepath.IsAbs(job.ServerDir) {
-			if job.ServerDir == "" {
-				return job, fmt.Errorf("数据库服务器目录必填：请填写数据库服务器上的本地绝对路径（如 D:\\bak）")
-			}
-			return job, fmt.Errorf("数据库服务器目录 %q 不是绝对路径：请填写数据库服务器本机的本地绝对路径（如 D:\\bak）", job.ServerDir)
+		// 该目录属于数据库服务器，不属于执行器：执行器可能运行在 Linux / Docker 中，
+		// filepath.IsAbs 会把 E:\bak 判成相对路径而误拒。这里改用 Windows 语义的纯文本校验，
+		// 与运行时复核（runner 调用的 backup.NormalizeServerDir）共用同一套规则。
+		serverDir, err := backup.NormalizeServerDir(job.ServerDir)
+		if err != nil {
+			return job, err
 		}
-		if strings.ContainsRune(job.ServerDir, '\'') {
-			return job, fmt.Errorf("服务器目录包含不安全字符")
-		}
+		job.ServerDir = serverDir
 		job.TargetID = ""
 	case "", "storage":
 		job.LocationKind = "storage"

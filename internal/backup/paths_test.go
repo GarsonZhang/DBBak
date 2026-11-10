@@ -97,6 +97,50 @@ func TestNormalizeSubdir(t *testing.T) {
 	}
 }
 
+// TestNormalizeServerDir 覆盖数据库服务器目录校验：它属于数据库主机而不是执行器，
+// 执行器可能运行在 Linux / Docker 中（filepath.IsAbs 不认盘符），因此必须按 Windows 语义
+// 做纯文本判断，且不接受相对路径。
+func TestNormalizeServerDir(t *testing.T) {
+	accepted := map[string]string{
+		`E:\webs\tce.gzyh.com\data\bak`: `E:\webs\tce.gzyh.com\data\bak`,
+		`D:\bak`:                       `D:\bak`,
+		`  D:\bak  `:                   `D:\bak`,
+		`D:\bak\`:                      `D:\bak`,
+		`E:/webs/tce/data/bak`:         `E:\webs\tce\data\bak`,
+		`c:\lowercase`:                 `c:\lowercase`,
+		`D:\bak\生产 备份`:                `D:\bak\生产 备份`,
+		`\\192.168.10.198\backup`:      `\\192.168.10.198\backup`,
+		`\\nas\bak\sqlserver`:          `\\nas\bak\sqlserver`,
+	}
+	for input, expected := range accepted {
+		actual, err := NormalizeServerDir(input)
+		if err != nil {
+			t.Fatalf("服务器目录 %q 不应被拒绝: %v", input, err)
+		}
+		if actual != expected {
+			t.Errorf("服务器目录 %q 规范化结果 %q，期望 %q", input, actual, expected)
+		}
+	}
+	// 盘符相对写法 C:bak 依赖该盘的当前目录，不是明确的绝对路径，必须拒绝。
+	if _, err := NormalizeServerDir(`C:bak`); err == nil {
+		t.Errorf("盘符相对路径 C:bak 应被拒绝")
+	}
+	invalid := []string{
+		"", "   ", "bak", "bak\\sub", `\rooted`, "/rooted", ".", "..",
+		`D:\bak\..\etc`, `D:\bak\*.bak`, `D:\bak\file?.bak`, `D:\bak\a"b`, "D:\\bak\x00",
+		`D:\O'Brien`, "\\\\", `\\host`, `\\host\`,
+	}
+	for _, input := range invalid {
+		if _, err := NormalizeServerDir(input); err == nil {
+			t.Errorf("服务器目录 %q 应被拒绝", input)
+		}
+	}
+	long := `D:\` + strings.Repeat("a", 300)
+	if _, err := NormalizeServerDir(long); err == nil {
+		t.Errorf("超过 300 字符的服务器目录应被拒绝")
+	}
+}
+
 // TestArtifactRelativePathGrouping 验证不同实例任务在根目录下的对象位置不同且仍在授权范围内。
 func TestArtifactRelativePathGrouping(t *testing.T) {
 	root := t.TempDir()

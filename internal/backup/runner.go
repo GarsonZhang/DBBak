@@ -107,8 +107,10 @@ func (r *Runner) execute(parent context.Context, runID string) {
 			r.failRun(ctx, &run, nil, "UNSUPPORTED_LOCATION", "数据库服务器本地备份当前只支持 SQL Server 原生备份")
 			return
 		}
-		if !filepath.IsAbs(job.ServerDir) {
-			r.failRun(ctx, &run, nil, "SERVER_PATH_INVALID", "服务器目录必须是数据库服务器上的绝对路径")
+		// 执行器可能运行在 Linux / Docker 中，不能用 filepath.IsAbs 判断数据库服务器上的
+		// Windows 盘符路径；保存时已按同一规则校验，这里复核以防配置被直接改库绕过。
+		if _, normalizeErr := NormalizeServerDir(job.ServerDir); normalizeErr != nil {
+			r.failRun(ctx, &run, nil, "SERVER_PATH_INVALID", normalizeErr.Error())
 			return
 		}
 	} else {

@@ -128,7 +128,7 @@
               </div>
             </div>
             <label class="field field-full" id="storage-field"><span class="field-label">本地存储目录</span><input name="storage_root" maxlength="300" value="${esc(defaultRoot)}"><span class="hint">执行器所在主机上的备份目录；相同目录的多个任务共用同一登记。</span></label>
-            <label class="field field-full" id="server-dir-field"><span class="field-label">数据库服务器目录</span><input name="server_dir" maxlength="300" placeholder="例如 D:\\bak" value="${esc(c.server_dir||'')}"><span class="hint">SQL Server 所在主机上的绝对路径，目录需已存在且服务账号有写权限；执行器无法预先验证。</span></label>
+            <label class="field field-full" id="server-dir-field"><span class="field-label">数据库服务器目录</span><input name="server_dir" maxlength="300" placeholder="例如 D:\\bak 或 \\\\服务器\\共享\\bak" value="${esc(c.server_dir||'')}"><span class="hint">SQL Server 所在主机上的绝对路径（盘符或 UNC），目录需已存在且服务账号有写权限；执行器无法预先验证。</span></label>
             <label class="field field-full"><span class="field-label">输出子目录（可选）</span><input name="subdir" maxlength="120" placeholder="例如 mysql-prod 或 华东/mysql-prod" value="${esc(c.subdir||'')}"><span class="hint">相对存储根目录；实际落点为「根目录/子目录/数据库名/年/月/文件」，留空则直接写入根目录。</span></label>
           </div>
         </section>
