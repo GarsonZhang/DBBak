@@ -4,14 +4,8 @@ name: dbbak-production
 
 services:
   dbbak:
-    image: dbbak:0.2.0-phase5
-    build:
-      context: ../..
-      dockerfile: deploy/docker/Dockerfile
+    image: 192.168.10.221/library/dbbak:latest
     restart: unless-stopped
-    init: true
-    user: "10001:10001"
-    read_only: true
     environment:
       DBBAK_ADDR: 0.0.0.0:8080
       DBBAK_DATA_DIR: /var/lib/dbbak
@@ -21,8 +15,13 @@ services:
       DBBAK_SESSION_TTL: 12h
       DBBAK_SCHEDULER_INTERVAL: 2s
       DBBAK_BACKUP_TIMEOUT: 30m
+      # 首次启动自动建号：仅在元数据库还没有任何用户时生效，已有账号则完全忽略，
+      # 因此长期保留该变量也不会重置密码。建议从宿主机环境或 .env 注入，不要硬编码。
+      # 未设置时容器照常启动，但无法登录，需要另外执行 init-admin。
+      DBBAK_ADMIN_USERNAME: ${DBBAK_ADMIN_USERNAME:-admin}
+      DBBAK_ADMIN_PASSWORD: ${DBBAK_ADMIN_PASSWORD:-}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "18110:8080"
     volumes:
       # SQLite 与 -wal/-shm 必须位于同一数据卷；主密钥使用独立卷并单独异地备份。
       - dbbak-data:/var/lib/dbbak
