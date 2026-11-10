@@ -303,7 +303,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		// 只把服务器目录与模式交给适配器：它据此拼 BACKUP 的 DISK 目标，不触碰执行器文件系统。
 		adapterTarget = metadata.StorageTarget{ID: "", Kind: "database_server", ServerRoot: job.ServerDir}
 	}
-	result, err := adapter.Execute(ctx, source, adapterTarget, password, workPath, BackupSpec{Type: backupType, Base: base})
+	result, err := adapter.Execute(ctx, source, adapterTarget, password, workPath, BackupSpec{Type: backupType, Base: base, FileName: artifactName})
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, ErrorCode(err), SafeErrorMessage(err))
 		return

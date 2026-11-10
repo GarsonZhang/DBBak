@@ -2,8 +2,10 @@ package backup
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -18,6 +20,40 @@ func TestSQLServerToolAndPathValidation(t *testing.T) {
 	source := metadata.Source{Engine: "sqlserver", Host: `localhost\MSSQLSERVER`, Port: 1433, Database: "dbbak_test_source", Username: "integrated"}
 	if _, err := client.Execute(context.Background(), source, metadata.StorageTarget{}, "", t.TempDir(), BackupSpec{Type: "full"}); err == nil || ErrorCode(err) != "SERVER_PATH_REQUIRED" {
 		t.Fatalf("缺少数据库服务路径应明确失败: %v", err)
+	}
+}
+
+// 服务器本地备份的文件名必须来自 BackupSpec.FileName（<数据库名>-<YYYYMMDDHHmmss>），
+// 不能是执行器临时目录的 basename（dbbak-run-xxxx）——那个名字与备份对象毫无关系。
+// Windows 上无法直接执行 shell 替身，因此用 Windows 侧只读校验：ServerRoot 造出来的目标路径
+// 必须包含任务文件名。真正跑通仍以 Docker/Linux 环境的一次真实备份为准。
+func TestSQLServerServerLocalUsesSpecFileName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 无法执行 shell 替身；该用例在 Linux/Docker 上执行")
+	}
+	workDir := t.TempDir()
+	capture := filepath.Join(workDir, "captured.sql")
+	// 替身只把 -i 指定的脚本原样存下来，不做真实连接。
+	script := "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-i\" ]; then cp \"$2\" " + capture + "; fi; shift; done\necho '1|2|3|4|5|1024'\n"
+	toolPath := filepath.Join(workDir, "fake-sqlcmd.sh")
+	if err := os.WriteFile(toolPath, []byte(script), 0o755); err != nil {
+		t.Skipf("当前环境无法准备 sqlcmd 替身: %v", err)
+	}
+	client := SQLServerClient{SQLCMDPath: toolPath}
+	source := metadata.Source{Engine: "sqlserver", Host: "127.0.0.1", Port: 1433, Database: "tce_prd", Username: "sa"}
+	target := metadata.StorageTarget{Kind: "database_server", ServerRoot: `D:\bak`}
+	if _, err := client.Execute(context.Background(), source, target, "p", workDir, BackupSpec{Type: "full", FileName: "tce_prd-20261110133700"}); err != nil {
+		t.Fatalf("服务器本地备份不应失败: %v", err)
+	}
+	content, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("未截获 BACKUP 语句: %v", err)
+	}
+	if !strings.Contains(string(content), "tce_prd-20261110133700.bak") {
+		t.Fatalf("备份目标未使用任务文件名: %s", content)
+	}
+	if strings.Contains(string(content), "dbbak-run-") {
+		t.Fatalf("备份目标误用了执行器临时目录名: %s", content)
 	}
 }
 

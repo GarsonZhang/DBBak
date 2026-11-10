@@ -26,6 +26,11 @@ type ExecuteResult struct {
 type BackupSpec struct {
 	Type string // full | differential | log
 	Base *metadata.Artifact
+	// FileName 是本次备份的目标文件名（不含扩展名与路径），由 runner 按
+	// <数据库名>-<YYYYMMDDHHmmss> 生成。需要由数据库服务自己写盘的适配器
+	// （SQL Server 原生 BACKUP）必须用它命名，不能再用执行器临时目录名——
+	// 那个名字是 os.MkdirTemp 生成的随机串，与备份对象毫无关系。
+	FileName string
 }
 
 // RouteNamer 由同一引擎存在多条备份路线的适配器实现。

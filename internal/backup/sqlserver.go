@@ -82,7 +82,14 @@ func (c SQLServerClient) Execute(ctx context.Context, source metadata.Source, ta
 	if target.ServerRoot == "" {
 		return ExecuteResult{}, &ToolError{Code: "SERVER_PATH_REQUIRED", Message: "SQL Server 原生备份必须配置数据库服务可访问的 server_root"}
 	}
-	name := filepath.Base(workPath) + extension
+	// 服务器本地模式由数据库服务自己写盘，文件名必须用 runner 给的
+	// <数据库名>-<YYYYMMDDHHmmss>；workPath 是执行器临时目录（dbbak-run-xxxx），
+	// 拿它的 basename 当文件名会让服务器上出现与备份对象毫无关系的随机名。
+	name := spec.FileName + extension
+	if spec.FileName == "" {
+		// 兜底：适配器被单独调用（测试或未来的远程 Agent）时退回原行为，避免空文件名。
+		name = filepath.Base(workPath) + extension
+	}
 	serverLocal := target.Kind == "database_server"
 	var localOutput string
 	if !serverLocal {
