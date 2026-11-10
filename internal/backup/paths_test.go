@@ -5,18 +5,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSecurePathAndHash(t *testing.T) {
 	root := t.TempDir()
-	path, err := SecurePath(root, "db/2026/10/backup.sql", false)
+	path, err := SecurePath(root, "db/2026/10/backup.sql", false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = os.WriteFile(path, []byte("CREATE TABLE test(id INT);\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := SecurePath(root, "db/2026/10/backup.sql", true)
+	resolved, err := SecurePath(root, "db/2026/10/backup.sql", true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +26,7 @@ func TestSecurePathAndHash(t *testing.T) {
 		t.Fatalf("校验失败 size=%d digest=%q err=%v", size, digest, err)
 	}
 	for _, invalid := range []string{"../outside.sql", "db/../../outside.sql", "/absolute.sql", `\root-relative.sql`, `C:\outside.sql`, `\\server\share\outside.sql`} {
-		if _, err = SecurePath(root, invalid, false); err == nil {
+		if _, err = SecurePath(root, invalid, false, false); err == nil {
 			t.Errorf("路径 %q 应被拒绝", invalid)
 		}
 	}
@@ -33,7 +34,7 @@ func TestSecurePathAndHash(t *testing.T) {
 	if err = os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = SecurePath(root, outside, true); err == nil {
+	if _, err = SecurePath(root, outside, true, false); err == nil {
 		t.Fatal("授权目录外的绝对路径应被拒绝")
 	}
 }
@@ -141,7 +142,32 @@ func TestNormalizeServerDir(t *testing.T) {
 	}
 }
 
-// TestArtifactRelativePathGrouping 验证不同实例任务在根目录下的对象位置不同且仍在授权范围内。
+// TestArtifactFileName 固定备份文件名格式：<数据库名>-<YYYYMMDDHHmmss>，时间取运行开始的 UTC 时刻。
+func TestArtifactFileName(t *testing.T) {
+	started := time.Date(2026, 11, 10, 4, 15, 30, 0, time.UTC)
+	// UTC 存储 + 按任务时区换算：北京时间 12:15:30 对应文件名里的 041530，与 run.started_at 同源。
+	if got := ArtifactFileName("tce_system", started); got != "tce_system-20261110041530" {
+		t.Fatalf("文件名不符合约定: %q", got)
+	}
+	// 数据库名中的非法字符替换为下划线，保留中文以便运维辨认。
+	if got := ArtifactFileName(`tce/system:a`, started); got != "tce_system_a-20261110041530" {
+		t.Errorf("非法字符未被清洗: %q", got)
+	}
+	if got := ArtifactFileName("生产库", started); got != "生产库-20261110041530" {
+		t.Errorf("中文库名应保留: %q", got)
+	}
+	if got := ArtifactFileName("", started); got != "database-20261110041530" {
+		t.Errorf("空库名应退化为 database: %q", got)
+	}
+	if got := ArtifactFileName("CON", started); got != "_CON-20261110041530" {
+		t.Errorf("Windows 保留设备名应加前缀: %q", got)
+	}
+	if got := ArtifactFileName("tce. ", started); got != "tce-20261110041530" {
+		t.Errorf("结尾的点应被去掉: %q", got)
+	}
+}
+
+// TestSecurePathAndHash 验证不同实例任务在根目录下的对象位置不同且仍在授权范围内。
 func TestArtifactRelativePathGrouping(t *testing.T) {
 	root := t.TempDir()
 	first := ArtifactRelativePath("mysql-prod", "dbbak_source", "2026/11/run_a.sql")
@@ -156,7 +182,7 @@ func TestArtifactRelativePathGrouping(t *testing.T) {
 		t.Fatalf("空子目录应保持旧的根目录布局: %s", legacy)
 	}
 	for _, relative := range []string{first, second} {
-		path, err := SecurePath(root, relative, false)
+		path, err := SecurePath(root, relative, false, false)
 		if err != nil {
 			t.Fatalf("子目录对象路径应通过授权校验: %s %v", relative, err)
 		}

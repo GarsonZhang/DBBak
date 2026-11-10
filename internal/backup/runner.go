@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 
 	"dbbak/internal/metadata"
@@ -265,13 +264,17 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		artifact.ParentID = &parent
 	}
 	dateDir := now.Format("2006/01")
+	// 备份文件名固定为 <数据库名>-<YYYYMMDDHHmmss>：时间取运行开始冻结的 UTC 时刻，
+	// 与 run.started_at 同源，不会因为写入耗时不同而产生两套基准。
+	// 对象路径为 <子目录>/<数据库>/<YYYY/MM>/<文件名>，仍按数据库与月份分目录。
+	artifactName := ArtifactFileName(source.Database, now)
 	// 子目录来自任务配置，运行前再规范化一次：即使配置被绕过校验写库，也不会把对象写出授权根目录。
 	subdir, err := NormalizeSubdir(job.Subdir)
 	if err != nil {
 		r.failRun(ctx, &run, nil, "SUBDIR_INVALID", err.Error())
 		return
 	}
-	workRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/."+run.ID+".attempt-1")
+	workRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/"+run.ID)
 	artifact.RelativePath = workRelative
 	if err = r.store.CreateArtifact(ctx, artifact); err != nil {
 		r.failRun(ctx, &run, nil, "METADATA_ERROR", "无法登记备份对象")
@@ -281,12 +284,19 @@ func (r *Runner) execute(parent context.Context, runID string) {
 	if serverLocal || ftpStorage || ossStorage {
 		workPath = root // 远程模式的临时工作目录，defer 已负责清理
 	} else {
-		placeholder, pathErr := SecurePath(root, workRelative+"/artifact.pending", false)
-		if pathErr != nil {
+		// 每次运行的工作目录是 <子目录>/<数据库>/<YYYY/MM>/run_<id>：先解析占位文件路径，
+		// 父目录会在解析时一并创建；再复核该目录确实是根目录内的真实目录（防止被替换成
+		// 越过授权根的符号链接），并直接作为适配器的工作目录。
+		if _, pathErr := SecurePath(root, workRelative+"/artifact.pending", false, false); pathErr != nil {
 			r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", pathErr.Error())
 			return
 		}
-		workPath = filepath.Dir(placeholder)
+		dirPath, dirErr := SecurePath(root, workRelative, true, true)
+		if dirErr != nil {
+			r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", dirErr.Error())
+			return
+		}
+		workPath = dirPath
 	}
 	adapterTarget := target
 	if serverLocal {
@@ -319,7 +329,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 			return
 		}
 		size, _ := meta["backup_size"].(float64)
-		artifact.RelativePath = ArtifactRelativePath(subdir, source.Database, dateDir+"/"+run.ID+result.Extension)
+		artifact.RelativePath = ArtifactRelativePath(subdir, source.Database, dateDir+"/"+artifactName+result.Extension)
 		artifact.Size = int64(size)
 		artifact.State = "uploaded"
 		if err = r.store.UpdateArtifact(ctx, artifact); err != nil {
@@ -343,7 +353,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		r.failRun(ctx, &run, &artifact, "FILE_VERIFICATION_FAILED", err.Error())
 		return
 	}
-	finalRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/"+run.ID+result.Extension)
+	finalRelative := ArtifactRelativePath(subdir, source.Database, dateDir+"/"+artifactName+result.Extension)
 
 	if ftpStorage {
 		// FTP：上传后整文件回读比对哈希，通过才登记 verified；本地副本随即删除。
@@ -433,7 +443,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		return
 	}
 
-	finalPath, err := SecurePath(root, finalRelative, false)
+	finalPath, err := SecurePath(root, finalRelative, false, false)
 	if err != nil {
 		r.failRun(ctx, &run, &artifact, "STORAGE_PATH_REJECTED", err.Error())
 		return
@@ -449,6 +459,7 @@ func (r *Runner) execute(parent context.Context, runID string) {
 		r.failRun(ctx, &run, &artifact, "STORAGE_ERROR", "无法提交备份文件: "+err.Error())
 		return
 	}
+	// 工作目录里只剩本次运行的中间产物，最终文件已拷贝到 finalPath；删掉它避免留下垃圾。
 	if removeErr := os.RemoveAll(workPath); removeErr != nil {
 		r.log(ctx, run.ID, "WARN", "临时工作目录待对账: "+removeErr.Error())
 	}

@@ -33,7 +33,7 @@ func TestCleanupPreviewExecutionAndStaleProtection(t *testing.T) {
 	}
 	oldArtifact := createTestArtifact(t, store, job, target, "old", now.Add(-60*24*time.Hour))
 	newArtifact := createTestArtifact(t, store, job, target, "new", now.Add(-24*time.Hour))
-	oldPath, err := SecurePath(target.Root, oldArtifact.RelativePath, true)
+	oldPath, err := SecurePath(target.Root, oldArtifact.RelativePath, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestCleanupPreviewExecutionAndStaleProtection(t *testing.T) {
 	if _, err = os.Stat(oldPath); !os.IsNotExist(err) {
 		t.Fatalf("过期文件仍存在: %v", err)
 	}
-	if _, err = SecurePath(target.Root, newArtifact.RelativePath, true); err != nil {
+	if _, err = SecurePath(target.Root, newArtifact.RelativePath, true, false); err != nil {
 		t.Fatalf("受保护文件被删除: %v", err)
 	}
 
@@ -91,7 +91,7 @@ func createTestArtifact(t *testing.T, store *metadata.Store, job metadata.Job, t
 		t.Fatal(err)
 	}
 	relative := "db/" + name + ".sql"
-	path, err := SecurePath(target.Root, relative, false)
+	path, err := SecurePath(target.Root, relative, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

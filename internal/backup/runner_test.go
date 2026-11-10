@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -103,7 +104,12 @@ func TestRunnerConcurrencyAndVerifiedArtifact(t *testing.T) {
 		t.Fatalf("备份对象数量错误: %v %v", artifacts, err)
 	}
 	artifact := artifacts[0]
-	path, err := SecurePath(target.Root, artifact.RelativePath, true)
+	// 文件名固定为 <数据库名>-<YYYYMMDDHHmmss><扩展名>：便于运维在服务器目录里直接认库和时间。
+	base := filepath.Base(artifact.RelativePath)
+	if matched, _ := regexp.MatchString(`^dbbak_source-\d{14}\.sql$`, base); !matched {
+		t.Fatalf("备份文件名不符合 <数据库名>-<YYYYMMDDHHmmss> 约定: %s", base)
+	}
+	path, err := SecurePath(target.Root, artifact.RelativePath, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}

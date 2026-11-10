@@ -8,9 +8,9 @@ import (
 )
 
 // attemptResiduePattern 匹配 runner 自己创建的工作目录名。
-// 见 runner.go 的 workRelative：<subdir>/<database>/<YYYY/MM>/.run_<hex>.attempt-<n>。
-// 小写点前缀来自 runner，历史数据里也存在不带点的同类目录，因此两者都接受。
-var attemptResiduePattern = regexp.MustCompile(`^\.?run_[0-9a-f]{16,64}\.attempt-\d+$`)
+// 现行命名为 run_<32 位 hex>（见 runner.go 的 workRelative：<subdir>/<database>/<YYYY/MM>/<run_id>）；
+// 历史版本用过 .run_<hex>.attempt-<n>，旧记录仍需能被识别清理，因此两代命名都要接受。
+var attemptResiduePattern = regexp.MustCompile(`^(?:\.?run_[0-9a-f]{16,64}\.attempt-\d+|run_[0-9a-f]{16,64})$`)
 
 const (
 	// residueMaxEntries 与 residueMaxDepth 是防呆上限：超过就整体放弃，不做部分清理。

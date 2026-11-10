@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // PrepareRoot 规范化并创建授权根目录，返回解析符号链接后的绝对路径。
@@ -95,9 +96,56 @@ func ArtifactRelativePath(subdir, database, fileName string) string {
 	return strings.Join(parts, "/")
 }
 
+// ArtifactFileName 生成备份文件名（不含扩展名）：<数据库名>-<YYYYMMDDHHmmss>。
+//
+// 时间取运行开始时冻结的 UTC 时间，与 runs.started_at 同源，界面显示按任务时区换算；
+// 不用本地时间，避免服务迁移时区后新旧文件名基准不一致。数据库名只保留可安全用于
+// Windows/Linux/FTP 对象的字符，中文名保留可读性，非法字符统一替换为下划线。
+// 同一数据库在同一秒内触发两次（并发或手动连点）会撞名：落盘侧在 Move 前检查目标存在并拒绝覆盖，
+// 运行记录仍以 run_id 区分，不会出现“两个运行共用一个文件”的假象。
+func ArtifactFileName(database string, startedAt time.Time) string {
+	return SafeNameSegment(database) + "-" + startedAt.UTC().Format("20060102150405")
+}
+
+// SafeNameSegment 把任意标识清洗成适合做文件名的一段：替换路径分隔符与保留字符，
+// 去掉首尾的点与空格（Windows 无法创建以空格/点结尾的文件），空值退化为 database。
+func SafeNameSegment(value string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|', '\x00', '\r', '\n', '\t':
+			return '_'
+		}
+		return r
+	}, value)
+	cleaned = strings.TrimRight(cleaned, ". ")
+	cleaned = strings.TrimSpace(cleaned)
+	// 设备名（CON、PRN、NUL、COM1 等）在 Windows 上是保留名，加前缀避免创建失败。
+	if cleaned == "" {
+		return "database"
+	}
+	if reservedName(cleaned) {
+		return "_" + cleaned
+	}
+	return cleaned
+}
+
+func reservedName(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, base := range []string{"CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"} {
+		if upper == base {
+			return true
+		}
+	}
+	return false
+}
+
 // SecurePath 将相对对象路径限制在授权根目录内，并检查父目录或文件的真实路径。
 // 该函数不执行删除；清理还必须重新核对对象状态。
-func SecurePath(root, relative string, mustExist bool) (string, error) {
+//
+// run_dir=true 表示 relative 是本次运行独占的目录（如 <数据库>/2026/11/<run_id>）：
+// 允许该目录已存在（重试、进程重启后重跑同一 run 复用目录），但仍要求它是根目录内的真实目录，
+// 不能是指向根目录外的符号链接。
+func SecurePath(root, relative string, mustExist, runDir bool) (string, error) {
 	resolvedRoot, err := PrepareRoot(root)
 	if err != nil {
 		return "", err
@@ -120,6 +168,13 @@ func SecurePath(root, relative string, mustExist bool) (string, error) {
 		}
 		if err = ensureContained(resolvedRoot, resolved); err != nil {
 			return "", err
+		}
+		if runDir {
+			info, err := os.Stat(resolved)
+			if err != nil || !info.IsDir() {
+				return "", fmt.Errorf("运行目录不可用")
+			}
+			return resolved, nil
 		}
 		info, err := os.Stat(resolved)
 		if err != nil || !info.Mode().IsRegular() {
@@ -144,7 +199,7 @@ func SecurePath(root, relative string, mustExist bool) (string, error) {
 // SecureRemovalPath 解析授权根目录内待删除对象的路径。
 //
 // 与 SecurePath 的区别：不要求目标是普通文件，也不要求目标仍存在。
-// 备份中断会留下空的临时目录（例如 pg_basebackup 的 .run_<id>.attempt-1），
+// 备份中断会留下空的临时目录（例如 pg_basebackup 的 <run_id>），
 // 文件也可能被外部清理掉，这两种情况都必须能被登记为已删除，否则任务会永久卡在
 // “部分文件未删除”。存在时仍解析符号链接并复核是否越出根目录；
 // 是否真的删除、以及目录是否允许删除，由调用方按类型判断。

@@ -203,7 +203,7 @@ func (c *CleanupService) Execute(ctx context.Context, previewID string) ([]Clean
 			executions = append(executions, execution)
 			continue
 		}
-		path, pathErr := SecurePath(target.Root, artifact.RelativePath, true)
+		path, pathErr := SecurePath(target.Root, artifact.RelativePath, true, false)
 		if pathErr != nil {
 			execution.Message = pathErr.Error()
 			executions = append(executions, execution)

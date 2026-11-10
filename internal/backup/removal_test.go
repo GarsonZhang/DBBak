@@ -57,7 +57,7 @@ func TestRemovalRequiresForceConfirmation(t *testing.T) {
 	if _, err = service.Execute(ctx, RemovalTargetArtifact, older.ID, "错误的名称", true, "tester"); !errors.Is(err, ErrConfirmationRequired) {
 		t.Fatalf("确认名称不一致必须被拒绝: %v", err)
 	}
-	path, _ := SecurePath(target.Root, older.RelativePath, true)
+	path, _ := SecurePath(target.Root, older.RelativePath, true, false)
 	if _, statErr := os.Stat(path); statErr != nil {
 		t.Fatalf("被拒绝时文件不应删除: %v", statErr)
 	}
@@ -78,7 +78,7 @@ func TestRemovalArtifactForceDeletesFile(t *testing.T) {
 	if result.DeletedFiles != 1 || result.FailedFiles != 0 {
 		t.Fatalf("删除结果不符: %+v", result)
 	}
-	oldPath, _ := SecurePath(target.Root, older.RelativePath, true)
+	oldPath, _ := SecurePath(target.Root, older.RelativePath, true, false)
 	if _, statErr := os.Stat(oldPath); !os.IsNotExist(statErr) {
 		t.Fatalf("目标文件仍存在: %v", statErr)
 	}
@@ -86,7 +86,7 @@ func TestRemovalArtifactForceDeletesFile(t *testing.T) {
 	if err != nil || deleted.State != "deleted" {
 		t.Fatalf("元数据状态未更新: %v %+v", err, deleted)
 	}
-	newPath, _ := SecurePath(target.Root, newer.RelativePath, true)
+	newPath, _ := SecurePath(target.Root, newer.RelativePath, true, false)
 	if _, statErr := os.Stat(newPath); statErr != nil {
 		t.Fatalf("其他备份被误删: %v", statErr)
 	}
@@ -96,7 +96,7 @@ func TestRemovalArtifactForceDeletesFile(t *testing.T) {
 func TestRemovalRefusesHashMismatch(t *testing.T) {
 	ctx := context.Background()
 	store, _, target, older, _ := removalFixture(t)
-	path, _ := SecurePath(target.Root, older.RelativePath, true)
+	path, _ := SecurePath(target.Root, older.RelativePath, true, false)
 	if err := os.WriteFile(path, []byte("tampered content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestRemovalJobRequiresPausedThenDeletesEverything(t *testing.T) {
 		t.Fatalf("删除任务结果不符: %+v", result)
 	}
 	for _, artifact := range []metadata.Artifact{older, newer} {
-		path, _ := SecurePath(target.Root, artifact.RelativePath, true)
+		path, _ := SecurePath(target.Root, artifact.RelativePath, true, false)
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("备份文件未删除: %s %v", path, statErr)
 		}
@@ -207,7 +207,7 @@ func TestRemovalJobFilesKeepsJob(t *testing.T) {
 		t.Fatalf("任务应保留: %v", err)
 	}
 	for _, artifact := range []metadata.Artifact{older, newer} {
-		path, _ := SecurePath(target.Root, artifact.RelativePath, true)
+		path, _ := SecurePath(target.Root, artifact.RelativePath, true, false)
 		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
 			t.Fatalf("备份文件未删除: %s %v", path, statErr)
 		}
@@ -394,11 +394,15 @@ func TestAttemptResidueDetection(t *testing.T) {
 	cases := map[string]bool{
 		".run_7749645711870f9c1b1d068c.attempt-1": true,
 		"run_7749645711870f9c1b1d068c.attempt-2":  true,
+		// 现行命名：<数据库>/<YYYY/MM>/run_<hex>，中断后也要能被识别清理。
+		"run_7749645711870f9c1b1d068c":            true,
 		"postgres":                                false,
 		"full-backup-20261001":                    false,
 		".run_7749645711870f9c1b1d068c":           false,
 		".run_notahexid.attempt-1":                false,
 		".run_7749645711870f9c1b1d068c.attempt-1.bak": false,
+		"dbbak_source-20261110041500.sql":         false,
+		"run_7749645711870f9c1b1d068c.sql":        false,
 	}
 	for name, want := range cases {
 		if got := isAttemptResidueDir(name); got != want {
@@ -434,7 +438,7 @@ func TestRemovalRegistersExternallyDeletedFile(t *testing.T) {
 	ctx := context.Background()
 	store, _, target, older, _ := removalFixture(t)
 
-	path, err := SecurePath(target.Root, older.RelativePath, true)
+	path, err := SecurePath(target.Root, older.RelativePath, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
